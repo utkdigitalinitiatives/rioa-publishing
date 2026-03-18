@@ -1,0 +1,1197 @@
+---
+title: "UT System Journal Database Combination"
+author: "Alexander Harriman"
+date: "2025-04-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+This code takes all of the publications across the UT System, gathered from Web of Science, Scopus, Dimensions, and OpenAlex, and joins them together for the UT Publishing dashboard.
+
+This specifically works with the four main UT system campuses: UT Knoxville, UT Chattanooga, UT Health Sciences, and UT Martin. Other UT affiliated campuses will need to be added. Non-UT universities are joined elsewhere.
+
+
+# Load Packages
+
+
+```{r, warning = FALSE}
+library(readr)
+library(RSQLite)
+library(dplyr)
+library(tidyverse)
+library(data.table)
+library(writexl)
+```
+
+
+# Connect to the Publishing Database
+
+
+The full file path will need to go in the quotes below. The easiest method to do this is by going into your files, right-clicking on the folder, and selecting "Copy Address as Text" or "Copy as Path" (phrasing may differ on Mac).
+
+```{r}
+con <- dbConnect(SQLite(), "C:\\Users\\aharrima\\OneDrive - University of Tennessee\\Documents\\UTK_Publications.db")
+```
+
+
+
+# Web of Science Querying
+
+```{r}
+webOfScience <- dbGetQuery(con, 
+                           "
+                           SELECT *
+                           FROM wos_pubs_utsystem
+                           ")
+
+webOfScience
+```
+
+
+
+# Scopus Querying
+
+
+```{r}
+scopus <- dbGetQuery(con,
+                     "
+                     SELECT *
+                     FROM scopus_pubs_utsystem
+                     ")
+
+scopus
+```
+
+
+
+# Dimensions Querying
+
+
+```{r}
+dimensions <- dbGetQuery(con,
+                         "
+                         SELECT *
+                         FROM dimensions_pubs_utsystem
+                         ")
+
+dimensions
+```
+
+
+
+# OpenAlex Joining and Querying
+
+
+This assumes the joining was not done previously (essentially, that you gathered the articles from the OpenAlex API R code and then immediately came here). If the joining took place elsewhere, you can use a code chunk similar to those for Web of Science, Scopus, and Dimensions.
+
+
+```{r}
+openAlexUTK <- dbGetQuery(con,
+                         "
+                         SELECT *
+                         FROM openalex_pubs_utk
+                         ")
+
+
+openAlexUTC <- dbGetQuery(con,
+                         "
+                         SELECT *
+                         FROM openalex_pubs_utc
+                         ")
+
+
+openAlexUTM <- dbGetQuery(con,
+                         "
+                         SELECT *
+                         FROM openalex_pubs_utm
+                         ")
+
+
+openAlexUTHSC <- dbGetQuery(con,
+                         "
+                         SELECT *
+                         FROM openalex_pubs_uthsc
+                         ")
+
+openAlex <- rbind(openAlexUTK, openAlexUTC, openAlexUTM, openAlexUTHSC)
+
+dbWriteTable(con, 'openalex_pubs_utsystem', openAlex, overwrite = TRUE, row.names = FALSE)
+```
+
+
+
+
+# UT Chattanooga Publications
+
+
+## Get Publications from Each Source
+
+
+Each select statement removes columns from the full information in the database. 
+
+The mutate functions are due to known quirks from each data source; these are done to make sure the information is as consistent as possible and should not be changed unless you know the formatting for those columns/sources have changed.
+
+```{r, warning = FALSE}
+utcSmallA <- webOfScience |>
+  filter(`Publication Campus` == 'UT Chattanooga') |>
+  select(`Publication Type`, Authors, `Source Title`, `Book Author Full Names`, `Article Title`, `Document Type`, Affiliations, ORCIDs, `Funding Orgs`, `Cited Reference Count`, `Times Cited, All Databases`, Publisher, ISSN, eISSN, ISBN, `Publication Date`, `Publication Year`, DOI, `DOI Link`, `Book DOI`, `WoS Categories`, `Research Areas`, `Pubmed Id`, `Open Access Designations`, `Highly Cited Status`, `Hot Paper Status`, `Publication Campus`, `Unified Publisher`, Resource, `Number of Pages`, `Reprint Addresses`)
+
+utcSmallB <- scopus |>
+  filter(`Publication Campus` == 'UT Chattanooga') |>
+  select(Authors, Title, Year, DOI, `Source title`, Link, Affiliations, Publisher, Sponsors, ISSN, ISBN, `PubMed ID`, `Document Type`, `Publication Campus`, `Unified Publisher`, Resource, `Open Access`, `Funding Details`, `Page count`, `Correspondence Address`) |>
+  mutate(`Page count` = as.numeric(`Page count`))
+
+utcSmallC <- dimensions |>
+  filter(`Publication Campus` == 'UT Chattanooga') |>
+  select(DOI, ISBN, Title, Funding, Publisher, `Source title`, ISSN, `Publication date`, PubYear, `Open Access`, `Publication Type`, `Document Type`, Authors, `Corresponding Authors`, `Authors Affiliations`, Funder, `Times cited`, `Publication Campus`, `Unified Publisher`, PMID, Resource, `Units of Assessment`, `Funder Group`, Pagination, `Corresponding Authors`) |>
+  mutate(`Page count` = ifelse(length(str_split(dimensions$Pagination[1], "-")[[1]]) != 2, NA, as.numeric(str_split(dimensions$Pagination[1], "-")[[1]][2]) - as.numeric(str_split(dimensions$Pagination[1], "-")[[1]][1])))
+
+utcSmallD <- openAlex |>
+  filter(`Publication Campus` == 'UT Chattanooga') |>
+  mutate(`Page count` = ifelse(is.na(last_page) == TRUE | is.na(first_page) == TRUE, 0, as.numeric(last_page) - as.numeric(first_page)),
+         doi = substring(doi, 17, length(doi)),
+         PubMedID = NA,
+         Funding = NA,
+         ISBN = NA)
+```
+
+
+## Clean Up Columns
+
+More column mutating for clarity and consistency.
+
+```{r}
+utcCleanA <- utcSmallA |>
+  select(DOI, `Article Title`, Resource, `Publication Year`, `Unified Publisher`, `Open Access Designations`, `Pubmed Id`, Authors, `Source Title`, `Document Type`, `Research Areas`, `Times Cited, All Databases`, Affiliations, `Funding Orgs`, ISSN, ISBN, `Number of Pages`, `Reprint Addresses`) |>
+  mutate(`Source Title` = str_to_title(`Source Title`),
+         `Number of Pages` = ifelse(is.na(`Number of Pages`) == TRUE, 0, `Number of Pages`),
+         APC = NA_integer_)
+
+utcCleanB <- utcSmallB |>
+  select(DOI, Title, Resource, Year, `Unified Publisher`, `Open Access`, `PubMed ID`, Authors, `Source title`, `Document Type`, Affiliations, `Funding Details`, ISSN, ISBN, `Page count`, `Correspondence Address`) |>
+  mutate(`Research Areas` = NA,
+         `Times Cited` = 0,
+         `Page count` = ifelse(is.na(`Page count`) == TRUE, 0, `Page count`),
+         APC = NA_integer_)
+
+utcCleanC <- utcSmallC |>
+  select(DOI, Title, Resource, PubYear, `Unified Publisher`, `Open Access`, PMID, Authors, `Source title`, `Document Type`, `Units of Assessment`, `Times cited`, `Authors Affiliations`, `Funder Group`, ISSN, ISBN, `Page count`, `Corresponding Authors`) |>
+  mutate(`Research Areas` = substr(`Units of Assessment`, 5, nchar(`Units of Assessment`)),
+         `Page count` = ifelse(is.na(`Page count`) == TRUE, 0, `Page count`),
+         APC = NA_integer_) |>
+  select(DOI, Title, Resource, PubYear, `Unified Publisher`, `Open Access`, PMID, Authors, `Source title`, `Document Type`, `Research Areas`, `Times cited`, `Authors Affiliations`, `Funder Group`, ISSN, ISBN, `Page count`, `Corresponding Authors`, APC)
+
+utcCleanD <- utcSmallD |>
+  select(doi, title, `Publication Source`, publication_year, `Unified Publisher`, oa_status, PubMedID, Authors, source_display_name, type, Subjects, cited_by_count, Affiliations, Funding, issn_l, ISBN, `Page count`, isCorrespondingAuthor, APC) |>
+  mutate(isCorrespondingAuthor = ifelse(isCorrespondingAuthor == 'Yes', 'UT Chattanooga', isCorrespondingAuthor))
+```
+
+
+## Create Consistent Column Names
+
+The names are based on the Scopus table's names. Make sure all four sources use the same name format so they can be appended to each other.
+
+```{r}
+colnames(utcCleanA) <- c('DOI', 'Title', 'Resource', 'Year', 'Unified Publisher', 'Open Access', 'PubMed ID', 'Authors', 'Source title', 'Document Type', 'Research Areas', 'Times Cited', 'Affiliations', 'Funding Details', 'ISSN', 'ISBN', 'Page count', 'Correspondence Address', 'APC')
+colnames(utcCleanC) <- c('DOI', 'Title', 'Resource', 'Year', 'Unified Publisher', 'Open Access', 'PubMed ID', 'Authors', 'Source title', 'Document Type', 'Research Areas', 'Times Cited', 'Affiliations', 'Funding Details', 'ISSN', 'ISBN', 'Page count', 'Correspondence Address', 'APC')
+colnames(utcCleanD) <- c('DOI', 'Title', 'Resource', 'Year', 'Unified Publisher', 'Open Access', 'PubMed ID', 'Authors', 'Source title', 'Document Type', 'Research Areas', 'Times Cited', 'Affiliations', 'Funding Details', 'ISSN', 'ISBN', 'Page count', 'Correspondence Address', 'APC')
+```
+
+
+## Row Bind the Tables
+
+```{r}
+utcFull <- rbind(utcCleanA, utcCleanB, utcCleanC, utcCleanD)
+```
+
+
+
+## Clean Final Table
+
+The four sources will be joined by article DOI, as this is unique to each publication and should be consistent across all locations.
+
+```{r}
+utcFinal <- utcFull |>
+  group_by(DOI) |>
+  # Publication Sources
+  summarise(locationCount = length(unique(Resource)),
+            locationA = Resource[1],
+            locationB = ifelse(length(unique(Resource)) == 1, '', Resource[2]),
+            locationC = ifelse(length(unique(Resource)) < 3, '', Resource[3]),
+            locationD = ifelse(length(unique(Resource)) == 4, Resource[4], ''),
+            pubYear = min(Year),
+            `Unified Publisher` = `Unified Publisher`[1],
+            
+            # Open Access Designation
+            OA1 = `Open Access`[1],
+            OA2 = ifelse(length(unique(Resource)) == 1, '', `Open Access`[2]),
+            OA3 = ifelse(length(unique(Resource)) < 3, '', `Open Access`[3]),
+            OA4 = ifelse(length(unique(Resource)) == 4, `Open Access`[4], ''),
+            PubMedID = ifelse(is.na(`PubMed ID`[1]) == FALSE, `PubMed ID`[1],
+                              ifelse(is.na(`PubMed ID`[2]) == FALSE, `PubMed ID`[2],
+                                           ifelse(is.na(`PubMed ID`[3]) == FALSE, `PubMed ID`[3], `PubMed ID`[4]))),
+            Authors = ifelse(is.na(`Authors`[1]) == FALSE, Authors[1],
+                              ifelse(is.na(Authors[2]) == FALSE, Authors[2],
+                                           ifelse(is.na(Authors[3]) == FALSE, Authors[3], Authors[4]))),
+            NumAuthors = ifelse(Resource[1] == 'OpenAlex', length(str_split(Authors[1], ',')[[1]]), length(str_split(Authors[1], ';')[[1]])),
+            
+            # Source Title
+            SourceTitleA = `Source title`[1],
+            SourceTitleB = ifelse(length(unique(Resource)) == 1, '', `Source title`[2]),
+            SourceTitleC = ifelse(length(unique(Resource)) < 3, '', `Source title`[3]),
+            SourceTitleD = ifelse(length(unique(Resource)) == 4, `Source title`[4], ''),
+            DocumentType = `Document Type`[1],
+            
+            # Research Area
+            ResearchArea1 = `Research Areas`[1],
+            ResearchArea2 = ifelse(length(unique(Resource)) == 1, '', `Research Areas`[2]),
+            ResearchArea3 = ifelse(length(unique(Resource)) < 3, '', `Research Areas`[3]),
+            ResearchArea4 = ifelse(length(unique(Resource)) == 4, `Research Areas`[4], ''),
+            TimesCited = max(`Times Cited`, na.rm = TRUE),
+            
+            # Affiliation
+            Affiliation1 = Affiliations[1],
+            Affiliation2 = ifelse(length(unique(Resource)) == 1, '', Affiliations[2]),
+            Affiliation3 = ifelse(length(unique(Resource)) < 3, '', Affiliations[3]),
+            Affiliation4 = ifelse(length(unique(Resource)) == 4, Affiliations[4], ''),
+            
+            # Funder
+            FundingDetails1 = `Funding Details`[1],
+            FundingDetails2 = ifelse(length(unique(Resource)) == 1, '', `Funding Details`[2]),
+            FundingDetails3 = ifelse(length(unique(Resource)) < 3, '', `Funding Details`[3]),
+            FundingDetails4 = ifelse(length(unique(Resource)) == 4, `Funding Details`[4], ''),
+            
+            # ISBN and ISSN
+            ISBN1 = ISBN[1],
+            ISBN2 = ifelse(length(unique(Resource)) == 1, '', ISBN[2]),
+            ISBN3 = ifelse(length(unique(Resource)) < 3, '', ISBN[3]),
+            ISBN4 = ifelse(length(unique(Resource)) == 4, ISBN[4], ''),
+            ISSN1 = ISSN[1],
+            ISSN2 = ifelse(length(unique(Resource)) == 1, '', ISSN[2]),
+            ISSN3 = ifelse(length(unique(Resource)) < 3, '', ISSN[3]),
+            ISSN4 = ifelse(length(unique(Resource)) == 4, ISSN[4], ''),
+            
+            # Page Counts
+            pageCount1 = `Page count`[1],
+            pageCount2 = `Page count`[2],
+            pageCount3 = `Page count`[3],
+            pageCount4 = `Page count`[4],
+            Title = Title[1],
+            
+            # Confirmation of Campus Association
+            isCA1 = ifelse(grepl('Chattanooga', `Correspondence Address`[1], ignore.case = TRUE) == TRUE | `Correspondence Address`[1] == 'Yes', 1, 0),
+            isCA2 = ifelse(grepl('Chattanooga', `Correspondence Address`[2], ignore.case = TRUE) == TRUE | `Correspondence Address`[2] == 'Yes', 1, 0),
+            isCA3 = ifelse(grepl('Chattanooga', `Correspondence Address`[3], ignore.case = TRUE) == TRUE | `Correspondence Address`[3] == 'Yes', 1, 0),
+            isCA4 = ifelse(grepl('Chattanooga', `Correspondence Address`[4], ignore.case = TRUE) == TRUE | `Correspondence Address`[4] == 'Yes', 1, 0),
+            apcCost = ifelse(length(unique(Resource)) == sum(is.na(APC)), NA_integer_, sum(APC, na.rm = TRUE))) |>
+  mutate(isCA1 = ifelse(is.na(isCA1) == TRUE, 0, isCA1),
+         isCA2 = ifelse(is.na(isCA2) == TRUE, 0, isCA2),
+         isCA3 = ifelse(is.na(isCA3) == TRUE, 0, isCA3),
+         isCA4 = ifelse(is.na(isCA4) == TRUE, 0, isCA4)) |>
+  
+  # Cleaning of the four-way split information
+  mutate(OpenAccess = case_when(
+          OA4 == 'closed' | OA3 == 'Closed' | OA2 == 'Closed' | OA1 == 'Closed' ~ 'Closed',
+          str_detect(OA4, 'diamond') | str_detect(OA3, 'diamond') | str_detect(OA2, 'diamond') | str_detect(OA1, 'diamond') ~ 'Diamond',
+          str_detect(OA4, 'hybrid') | str_detect(OA3, 'Hybrid') | str_detect(OA2, 'Hybrid') | str_detect(OA1, 'Hybrid') | str_detect(OA1, 'hybrid') ~ 'Hybrid',
+          str_detect(OA4, 'gold') | str_detect(OA3, 'Gold') | str_detect(OA2, 'Gold') | str_detect(OA1, 'Gold') | str_detect(OA1, 'gold')  ~ 'Gold',
+          str_detect(OA4, 'bronze') | str_detect(OA3, 'Bronze') | str_detect(OA2, 'Bronze') | str_detect(OA1, 'Bronze') ~ 'Bronze',
+          str_detect(OA4, 'green') | str_detect(OA3, 'Green') | str_detect(OA2, 'Green') | str_detect(OA1, 'Green') ~ 'Green',
+          .default = 'Not Given'
+        ),
+        pageCount = pmax(pageCount1, pageCount2, pageCount3, pageCount4, na.rm = TRUE),
+        SourceTitle = case_when(
+          SourceTitleD != '' ~ SourceTitleD,
+          SourceTitleC != '' ~ SourceTitleC,
+          SourceTitleB != '' ~ SourceTitleB,
+          SourceTitleA != '' ~ SourceTitleA,
+          .default = 'Not Given'
+        ),
+        ResearchArea = case_when(
+          ResearchArea4 != '' ~ ResearchArea4,
+          ResearchArea3 != '' ~ ResearchArea3,
+          ResearchArea2 != '' ~ ResearchArea2,
+          ResearchArea1 != '' ~ ResearchArea1,
+          .default = 'Not Given'
+        ),
+        Affiliation = case_when(
+          Affiliation4 != '' ~ Affiliation4,
+          Affiliation3 != '' ~ Affiliation3,
+          Affiliation2 != '' ~ Affiliation2,
+          Affiliation1 != '' ~ Affiliation1,
+          .default = 'Not Given'
+        ),
+        FundingDetails = case_when(
+          FundingDetails4 != '' ~ FundingDetails4,
+          FundingDetails3 != '' ~ FundingDetails3,
+          FundingDetails2 != '' ~ FundingDetails2,
+          FundingDetails1 != '' ~ FundingDetails1,
+          .default = 'Not Given'
+        ),
+        ISSN = case_when(
+          ISSN4 != '' ~ ISSN4,
+          ISSN3 != '' ~ ISSN3,
+          ISSN2 != '' ~ ISSN2,
+          ISSN1 != '' ~ ISSN1,
+          .default = 'Not Given'
+        ),
+        ISBN = case_when(
+          ISBN4 != '' ~ ISBN4,
+          ISBN3 != '' ~ ISBN3,
+          ISBN2 != '' ~ ISBN2,
+          ISBN1 != '' ~ ISBN1,
+          .default = 'Not Given'
+        ),
+        isCorrespondingAuthor = ifelse(isCA1 == 1 | isCA2 == 1 | isCA3 == 1 | isCA4 == 1, 1, 0),
+        
+        # Source Database Information
+        Databases = paste0(locationA, ', ', locationB, ', ', locationC, ', ', locationD)) |>
+  mutate(Databases = str_replace(Databases, ",,", ",")) |>
+  mutate(Databases = str_replace(Databases, " ,", ",")) |>
+  mutate(Databases = str_replace(Databases, ",,", "")) |>
+  mutate(Databases = ifelse(
+    substr(Databases, nchar(Databases) - 1, nchar(Databases)) == ', ', substr(Databases, 1, nchar(Databases) - 2), Databases
+  )) |>
+  
+  # Document Type Cleaning
+  mutate(`Unified Document Type` = case_when(
+    DocumentType %in% c('Review', 'Review Article', 'Book Review', 'Review; Book Chapter', 'Review; Early Access', 'Art Exhibit Review', 'Music Performance Review', 'Theater Review', 'Book Review; Early Access', 'Film Review', 'Art Exhibit Review', 'Book Review; Book Chapter', 'Database Review', 'review', 'peer-review') ~ 'Review',
+    DocumentType %in% c('Article', 'Research Article', 'Article; Early Access', 'Article; Data Paper', 'Article; Publication with Expression of Concern', 'Article in press', 'article', 'preprint', 'report', 'dissertation') ~ 'Article',
+    DocumentType %in% c('Book', 'Book chapter', 'Article; Book Chapter', 'Fiction, Creative Prose', 'Biographical-Item; Book Chapter', 'book-chapter', 'book') ~ 'Book',
+    DocumentType %in% c('Letter', 'Letter To Editor', 'Letter to Editor', 'Editorial', 'Editorial Material', 'Editorial Material; Early Access', 'Editorial Material; Book Chapter', 'Letter; Early Access', 'editorial', 'letter') ~ 'Editorial Material',
+    DocumentType %in% c('Correction', 'Correction; Book Chapter', 'Correction Erratum', 'Correction; Early Access') ~ 'Correction',
+    DocumentType %in% c('Conference paper', 'Proceedings Paper', 'Article; Proceedings Paper') ~ 'Proceedings Paper',
+    DocumentType %in% c('Conference Abstract', 'Meeting Abstract') ~ 'Abstract',
+    .default = 'Other'
+  )) |>
+  mutate(ResearchArea = sapply(ResearchArea, function(x) paste(unique(unlist(str_split(x," , "))), collapse = ", "))) |>
+  
+  # Final Column Selection - This is where the final selection takes place
+  select(DOI, locationCount, pubYear, `Unified Publisher`, Databases, OpenAccess, PubMedID, Authors, NumAuthors, SourceTitle, DocumentType, `Unified Document Type`, ResearchArea, TimesCited, Affiliation, ISSN, ISBN, pageCount, Title, isCorrespondingAuthor, apcCost) |>
+  mutate(`Publication Campus` = 'UT Chattanooga',
+         apcCost = as.numeric(apcCost))
+
+# First and Last Author Checking
+for (i in 1:dim(utcFinal)[1]){
+  utcFinal$isFirstAuthor[i] = ifelse(grepl('University of Tennessee at Chattanooga', str_split(utcFinal$Affiliation[i], ';')[[1]][1], fixed = TRUE) == TRUE |
+                                     grepl('University of Tennessee at Chattanooga', str_split(utcFinal$Affiliation[i], '\\);')[[1]][1], fixed = TRUE) == TRUE |
+                                     grepl('University of Tennessee System', str_split(utcFinal$Affiliation[i], ';')[[1]][1], fixed = TRUE) == TRUE, 1, 0)
+  utcFinal$isLastAuthor[i] = ifelse(grepl('University of Tennessee at Chattanooga', str_split(utcFinal$Affiliation[i], ';')[[1]][length(str_split(utcFinal$Affiliation[i], ';')[[1]])], fixed = TRUE) == TRUE |
+                                    grepl('University of Tennessee at Chattanooga', str_split(utcFinal$Affiliation[i], '\\);')[[1]][length(str_split(utcFinal$Affiliation[i], '\\);')[[1]])], fixed = TRUE) == TRUE |
+                                    grepl('University of Tennessee System', str_split(utcFinal$Affiliation[i], ';')[[1]][length(str_split(utcFinal$Affiliation[i], ';')[[1]])], fixed = TRUE), 1, 0)
+}
+
+
+
+
+utcFinal
+```
+
+
+
+
+## Export to the Database
+
+
+```{r}
+dbWriteTable(con, name = 'full_pubs_utc', value = utcFinal, append = FALSE, overwrite = TRUE)
+```
+
+
+
+
+All other campuses follow the same approach as the UT Chattanooga example. If anything is changed for this example, it will need to be changed for all four locations.
+
+
+
+# UT Health Science Center Publications
+
+```{r, warning = FALSE}
+uthscSmallA <- webOfScience |>
+  filter(`Publication Campus` == 'Health Science') |>
+  select(`Publication Type`, Authors, `Source Title`, `Book Author Full Names`, `Article Title`, `Document Type`, Affiliations, ORCIDs, `Funding Orgs`, `Cited Reference Count`, `Times Cited, All Databases`, Publisher, ISSN, eISSN, ISBN, `Publication Date`, `Publication Year`, DOI, `DOI Link`, `Book DOI`, `WoS Categories`, `Research Areas`, `Pubmed Id`, `Open Access Designations`, `Highly Cited Status`, `Hot Paper Status`, `Publication Campus`, `Unified Publisher`, Resource, `Number of Pages`, `Reprint Addresses`) |>
+  mutate(APC = NA_integer_)
+
+uthscSmallB <- scopus |>
+  filter(`Publication Campus` == 'Health Science') |>
+  select(Authors, Title, Year, DOI, `Source title`, Link, Affiliations, Publisher, Sponsors, ISSN, ISBN, `PubMed ID`, `Document Type`, `Publication Campus`, `Unified Publisher`, Resource, `Open Access`, `Funding Details`, `Page count`, `Correspondence Address`) |>
+  mutate(`Page count` = as.numeric(`Page count`),
+         APC = NA_integer_)
+
+uthscSmallC <- dimensions |>
+  filter(`Publication Campus` == 'Health Science') |>
+  select(DOI, ISBN, Title, Funding, Publisher, `Source title`, ISSN, `Publication date`, PubYear, `Open Access`, `Publication Type`, `Document Type`, Authors, `Corresponding Authors`, `Authors Affiliations`, Funder, `Times cited`, `Publication Campus`, `Unified Publisher`, PMID, Resource, `Units of Assessment`, `Funder Group`, Pagination, `Corresponding Authors`) |>
+  mutate(`Page count` = ifelse(length(str_split(dimensions$Pagination[1], "-")[[1]]) != 2, NA, as.numeric(str_split(dimensions$Pagination[1], "-")[[1]][2]) - as.numeric(str_split(dimensions$Pagination[1], "-")[[1]][1])),
+         APC = NA_integer_)
+
+uthscSmallD <- openAlex |>
+  filter(`Publication Campus` == 'Health Science') |>
+  mutate(`Page count` = ifelse(is.na(last_page) == TRUE | is.na(first_page) == TRUE, 0, as.numeric(last_page) - as.numeric(first_page)),
+         doi = substring(doi, 17, length(doi)),
+         PubMedID = NA,
+         Funding = NA,
+         ISBN = NA)
+```
+
+
+## Clean Up Columns
+
+```{r}
+uthscCleanA <- uthscSmallA |>
+  select(DOI, `Article Title`, Resource, `Publication Year`, `Unified Publisher`, `Open Access Designations`, `Pubmed Id`, Authors, `Source Title`, `Document Type`, `Research Areas`, `Times Cited, All Databases`, Affiliations, `Funding Orgs`, ISSN, ISBN, `Number of Pages`, `Reprint Addresses`, APC) |>
+  mutate(`Source Title` = str_to_title(`Source Title`),
+         `Number of Pages` = ifelse(is.na(`Number of Pages`) == TRUE, 0, `Number of Pages`))
+
+uthscCleanB <- uthscSmallB |>
+  select(DOI, Title, Resource, Year, `Unified Publisher`, `Open Access`, `PubMed ID`, Authors, `Source title`, `Document Type`, Affiliations, `Funding Details`, ISSN, ISBN, `Page count`, `Correspondence Address`, APC) |>
+  mutate(`Research Areas` = NA,
+         `Times Cited` = 0,
+         `Page count` = ifelse(is.na(`Page count`) == TRUE, 0, `Page count`))
+
+uthscCleanC <- uthscSmallC |>
+  select(DOI, Title, Resource, PubYear, `Unified Publisher`, `Open Access`, PMID, Authors, `Source title`, `Document Type`, `Units of Assessment`, `Times cited`, `Authors Affiliations`, `Funder Group`, ISSN, ISBN, `Page count`, `Corresponding Authors`, APC) |>
+  mutate(`Research Areas` = substr(`Units of Assessment`, 5, nchar(`Units of Assessment`)),
+         `Page count` = ifelse(is.na(`Page count`) == TRUE, 0, `Page count`)) |>
+  select(DOI, Title, Resource, PubYear, `Unified Publisher`, `Open Access`, PMID, Authors, `Source title`, `Document Type`, `Research Areas`, `Times cited`, `Authors Affiliations`, `Funder Group`, ISSN, ISBN, `Page count`, `Corresponding Authors`, APC)
+
+uthscCleanD <- uthscSmallD |>
+  select(doi, title, `Publication Source`, publication_year, `Unified Publisher`, oa_status, PubMedID, Authors, source_display_name, type, Subjects, cited_by_count, Affiliations, Funding, issn_l, ISBN, `Page count`, isCorrespondingAuthor, APC) |>
+  mutate(isCorrespondingAuthor = ifelse(isCorrespondingAuthor == 'Yes', 'Health Science', isCorrespondingAuthor))
+
+colnames(uthscCleanA) <- c('DOI', 'Title', 'Resource', 'Year', 'Unified Publisher', 'Open Access', 'PubMed ID', 'Authors', 'Source title', 'Document Type', 'Research Areas', 'Times Cited', 'Affiliations', 'Funding Details', 'ISSN', 'ISBN', 'Page count', 'Correspondence Address', 'APC')
+colnames(uthscCleanC) <- c('DOI', 'Title', 'Resource', 'Year', 'Unified Publisher', 'Open Access', 'PubMed ID', 'Authors', 'Source title', 'Document Type', 'Research Areas', 'Times Cited', 'Affiliations', 'Funding Details', 'ISSN', 'ISBN', 'Page count', 'Correspondence Address', 'APC')
+colnames(uthscCleanD) <- c('DOI', 'Title', 'Resource', 'Year', 'Unified Publisher', 'Open Access', 'PubMed ID', 'Authors', 'Source title', 'Document Type', 'Research Areas', 'Times Cited', 'Affiliations', 'Funding Details', 'ISSN', 'ISBN', 'Page count', 'Correspondence Address', 'APC')
+```
+
+
+## Row Bind the Tables
+
+```{r}
+uthscFull <- rbind(uthscCleanA, uthscCleanB, uthscCleanC, uthscCleanD)
+```
+
+
+## Clean Final Table
+
+```{r}
+uthscFinal <- uthscFull |>
+  group_by(DOI) |>
+  summarise(locationCount = length(unique(Resource)),
+            locationA = Resource[1],
+            locationB = ifelse(length(unique(Resource)) == 1, '', Resource[2]),
+            locationC = ifelse(length(unique(Resource)) < 3, '', Resource[3]),
+            locationD = ifelse(length(unique(Resource)) == 4, Resource[4], ''),
+            pubYear = min(Year),
+            `Unified Publisher` = `Unified Publisher`[1],
+            OA1 = `Open Access`[1],
+            OA2 = ifelse(length(unique(Resource)) == 1, '', `Open Access`[2]),
+            OA3 = ifelse(length(unique(Resource)) < 3, '', `Open Access`[3]),
+            OA4 = ifelse(length(unique(Resource)) == 4, `Open Access`[4], ''),
+            PubMedID = ifelse(is.na(`PubMed ID`[1]) == FALSE, `PubMed ID`[1],
+                              ifelse(is.na(`PubMed ID`[2]) == FALSE, `PubMed ID`[2],
+                                           ifelse(is.na(`PubMed ID`[3]) == FALSE, `PubMed ID`[3], `PubMed ID`[4]))),
+            Authors = ifelse(is.na(`Authors`[1]) == FALSE, Authors[1],
+                              ifelse(is.na(Authors[2]) == FALSE, Authors[2],
+                                           ifelse(is.na(Authors[3]) == FALSE, Authors[3], Authors[4]))),
+            NumAuthors = ifelse(Resource[1] == 'OpenAlex', length(str_split(Authors[1], ',')[[1]]), length(str_split(Authors[1], ';')[[1]])),
+            SourceTitleA = `Source title`[1],
+            SourceTitleB = ifelse(length(unique(Resource)) == 1, '', `Source title`[2]),
+            SourceTitleC = ifelse(length(unique(Resource)) < 3, '', `Source title`[3]),
+            SourceTitleD = ifelse(length(unique(Resource)) == 4, `Source title`[4], ''),
+            DocumentType = `Document Type`[1],
+            ResearchArea1 = `Research Areas`[1],
+            ResearchArea2 = ifelse(length(unique(Resource)) == 1, '', `Research Areas`[2]),
+            ResearchArea3 = ifelse(length(unique(Resource)) < 3, '', `Research Areas`[3]),
+            ResearchArea4 = ifelse(length(unique(Resource)) == 4, `Research Areas`[4], ''),
+            TimesCited = max(`Times Cited`, na.rm = TRUE),
+            Affiliation1 = Affiliations[1],
+            Affiliation2 = ifelse(length(unique(Resource)) == 1, '', Affiliations[2]),
+            Affiliation3 = ifelse(length(unique(Resource)) < 3, '', Affiliations[3]),
+            Affiliation4 = ifelse(length(unique(Resource)) == 4, Affiliations[4], ''),
+            FundingDetails1 = `Funding Details`[1],
+            FundingDetails2 = ifelse(length(unique(Resource)) == 1, '', `Funding Details`[2]),
+            FundingDetails3 = ifelse(length(unique(Resource)) < 3, '', `Funding Details`[3]),
+            FundingDetails4 = ifelse(length(unique(Resource)) == 4, `Funding Details`[4], ''),
+            ISBN1 = ISBN[1],
+            ISBN2 = ifelse(length(unique(Resource)) == 1, '', ISBN[2]),
+            ISBN3 = ifelse(length(unique(Resource)) < 3, '', ISBN[3]),
+            ISBN4 = ifelse(length(unique(Resource)) == 4, ISBN[4], ''),
+            ISSN1 = ISSN[1],
+            ISSN2 = ifelse(length(unique(Resource)) == 1, '', ISSN[2]),
+            ISSN3 = ifelse(length(unique(Resource)) < 3, '', ISSN[3]),
+            ISSN4 = ifelse(length(unique(Resource)) == 4, ISSN[4], ''),
+            pageCount1 = `Page count`[1],
+            pageCount2 = `Page count`[2],
+            pageCount3 = `Page count`[3],
+            pageCount4 = `Page count`[4],
+            Title = Title[1],
+            isCA1 = ifelse(grepl('Health Science', `Correspondence Address`[1], ignore.case = TRUE) == TRUE | `Correspondence Address`[1] == 'Yes', 1, 0),
+            isCA2 = ifelse(grepl('Health Science', `Correspondence Address`[2], ignore.case = TRUE) == TRUE | `Correspondence Address`[2] == 'Yes', 1, 0),
+            isCA3 = ifelse(grepl('Health Science', `Correspondence Address`[3], ignore.case = TRUE) == TRUE | `Correspondence Address`[3] == 'Yes', 1, 0),
+            isCA4 = ifelse(grepl('Health Science', `Correspondence Address`[4], ignore.case = TRUE) == TRUE | `Correspondence Address`[4] == 'Yes', 1, 0),
+            apcCost = ifelse(length(unique(Resource)) == sum(is.na(APC)), NA_integer_, sum(APC, na.rm = TRUE))) |>
+  mutate(isCA1 = ifelse(is.na(isCA1) == TRUE, 0, isCA1),
+         isCA2 = ifelse(is.na(isCA2) == TRUE, 0, isCA2),
+         isCA3 = ifelse(is.na(isCA3) == TRUE, 0, isCA3),
+         isCA4 = ifelse(is.na(isCA4) == TRUE, 0, isCA4)) |>
+  mutate(OpenAccess = case_when(
+          OA4 == 'closed' | OA3 == 'Closed' | OA2 == 'Closed' | OA1 == 'Closed' ~ 'Closed',
+          str_detect(OA4, 'diamond') | str_detect(OA3, 'diamond') | str_detect(OA2, 'diamond') | str_detect(OA1, 'diamond') ~ 'Diamond',
+          str_detect(OA4, 'hybrid') | str_detect(OA3, 'Hybrid') | str_detect(OA2, 'Hybrid') | str_detect(OA1, 'Hybrid') | str_detect(OA1, 'hybrid') ~ 'Hybrid',
+          str_detect(OA4, 'gold') | str_detect(OA3, 'Gold') | str_detect(OA2, 'Gold') | str_detect(OA1, 'Gold') | str_detect(OA1, 'gold')  ~ 'Gold',
+          str_detect(OA4, 'bronze') | str_detect(OA3, 'Bronze') | str_detect(OA2, 'Bronze') | str_detect(OA1, 'Bronze') ~ 'Bronze',
+          str_detect(OA4, 'green') | str_detect(OA3, 'Green') | str_detect(OA2, 'Green') | str_detect(OA1, 'Green') ~ 'Green',
+          .default = 'Not Given'
+        ),
+        pageCount = pmax(pageCount1, pageCount2, pageCount3, pageCount4, na.rm = TRUE),
+        SourceTitle = case_when(
+          SourceTitleD != '' ~ SourceTitleD,
+          SourceTitleC != '' ~ SourceTitleC,
+          SourceTitleB != '' ~ SourceTitleB,
+          SourceTitleA != '' ~ SourceTitleA,
+          .default = 'Not Given'
+        ),
+        ResearchArea = case_when(
+          ResearchArea4 != '' ~ ResearchArea4,
+          ResearchArea3 != '' ~ ResearchArea3,
+          ResearchArea2 != '' ~ ResearchArea2,
+          ResearchArea1 != '' ~ ResearchArea1,
+          .default = 'Not Given'
+        ),
+        Affiliation = case_when(
+          Affiliation4 != '' ~ Affiliation4,
+          Affiliation3 != '' ~ Affiliation3,
+          Affiliation2 != '' ~ Affiliation2,
+          Affiliation1 != '' ~ Affiliation1,
+          .default = 'Not Given'
+        ),
+        FundingDetails = case_when(
+          FundingDetails4 != '' ~ FundingDetails4,
+          FundingDetails3 != '' ~ FundingDetails3,
+          FundingDetails2 != '' ~ FundingDetails2,
+          FundingDetails1 != '' ~ FundingDetails1,
+          .default = 'Not Given'
+        ),
+        ISSN = case_when(
+          ISSN4 != '' ~ ISSN4,
+          ISSN3 != '' ~ ISSN3,
+          ISSN2 != '' ~ ISSN2,
+          ISSN1 != '' ~ ISSN1,
+          .default = 'Not Given'
+        ),
+        ISBN = case_when(
+          ISBN4 != '' ~ ISBN4,
+          ISBN3 != '' ~ ISBN3,
+          ISBN2 != '' ~ ISBN2,
+          ISBN1 != '' ~ ISBN1,
+          .default = 'Not Given'
+        ),
+        isCorrespondingAuthor = ifelse(isCA1 == 1 | isCA2 == 1 | isCA3 == 1 | isCA4 == 1, 1, 0),
+        Databases = paste0(locationA, ', ', locationB, ', ', locationC)) |>
+  mutate(Databases = str_replace(Databases, ",,", ",")) |>
+  mutate(Databases = str_replace(Databases, " ,", ",")) |>
+  mutate(Databases = str_replace(Databases, ",,", "")) |>
+  mutate(Databases = ifelse(
+    substr(Databases, nchar(Databases) - 1, nchar(Databases)) == ', ', substr(Databases, 1, nchar(Databases) - 2), Databases
+  )) |>
+  mutate(`Unified Document Type` = case_when(
+    DocumentType %in% c('Review', 'Review Article', 'Book Review', 'Review; Book Chapter', 'Review; Early Access', 'Art Exhibit Review', 'Music Performance Review', 'Theater Review', 'Book Review; Early Access', 'Film Review', 'Art Exhibit Review', 'Book Review; Book Chapter', 'Database Review', 'review', 'peer-review') ~ 'Review',
+    DocumentType %in% c('Article', 'Research Article', 'Article; Early Access', 'Article; Data Paper', 'Article; Publication with Expression of Concern', 'Article in press', 'article', 'preprint', 'report', 'dissertation') ~ 'Article',
+    DocumentType %in% c('Book', 'Book chapter', 'Article; Book Chapter', 'Fiction, Creative Prose', 'Biographical-Item; Book Chapter', 'book-chapter', 'book') ~ 'Book',
+    DocumentType %in% c('Letter', 'Letter To Editor', 'Letter to Editor', 'Editorial', 'Editorial Material', 'Editorial Material; Early Access', 'Editorial Material; Book Chapter', 'Letter; Early Access', 'editorial', 'letter') ~ 'Editorial Material',
+    DocumentType %in% c('Correction', 'Correction; Book Chapter', 'Correction Erratum', 'Correction; Early Access') ~ 'Correction',
+    DocumentType %in% c('Conference paper', 'Proceedings Paper', 'Article; Proceedings Paper') ~ 'Proceedings Paper',
+    DocumentType %in% c('Conference Abstract', 'Meeting Abstract') ~ 'Abstract',
+    .default = 'Other'
+  )) |>
+  mutate(ResearchArea = sapply(ResearchArea, function(x) paste(unique(unlist(str_split(x," , "))), collapse = ", "))) |>
+  select(DOI, locationCount, pubYear, `Unified Publisher`, Databases, OpenAccess, PubMedID, Authors, NumAuthors, SourceTitle, DocumentType, `Unified Document Type`, ResearchArea, TimesCited, Affiliation, ISSN, ISBN, pageCount, Title, isCorrespondingAuthor, apcCost) |>
+  mutate(`Publication Campus` = 'Health Science')
+
+for (i in 1:dim(uthscFinal)[1]){
+  uthscFinal$isFirstAuthor[i] = ifelse(grepl('University of Tennessee Health Science Center', str_split(uthscFinal$Affiliation[i], ';')[[1]][1], fixed = TRUE) == TRUE |
+                                     grepl('University of Tennessee Health Science Center', str_split(uthscFinal$Affiliation[i], '\\);')[[1]][1], fixed = TRUE) == TRUE |
+                                     grepl('University of Tennessee System', str_split(uthscFinal$Affiliation[i], ';')[[1]][1], fixed = TRUE) == TRUE , 1, 0)
+  uthscFinal$isLastAuthor[i] = ifelse(grepl('University of Tennessee Health Science Center', str_split(uthscFinal$Affiliation[i], ';')[[1]][length(str_split(uthscFinal$Affiliation[i], ';')[[1]])], fixed = TRUE) == TRUE |
+                                    grepl('University of Tennessee Health Science Center', str_split(uthscFinal$Affiliation[i], '\\);')[[1]][length(str_split(uthscFinal$Affiliation[i], '\\);')[[1]])], fixed = TRUE) == TRUE |
+                                    grepl('University of Tennessee System', str_split(uthscFinal$Affiliation[i], ';')[[1]][length(str_split(uthscFinal$Affiliation[i], ';')[[1]])], fixed = TRUE) == TRUE  , 1, 0) 
+}
+  
+
+uthscFinal
+```
+
+
+
+
+## Export to the Database
+
+
+```{r}
+dbWriteTable(con, name = 'full_pubs_uthsc', value = uthscFinal, append = FALSE, overwrite = TRUE)
+```
+
+
+
+
+
+# UT Martin Publications
+
+```{r, warning = FALSE}
+utmSmallA <- webOfScience |>
+  filter(`Publication Campus` == 'UT Martin') |>
+  select(`Publication Type`, Authors, `Source Title`, `Book Author Full Names`, `Article Title`, `Document Type`, Affiliations, ORCIDs, `Funding Orgs`, `Cited Reference Count`, `Times Cited, All Databases`, Publisher, ISSN, eISSN, ISBN, `Publication Date`, `Publication Year`, DOI, `DOI Link`, `Book DOI`, `WoS Categories`, `Research Areas`, `Pubmed Id`, `Open Access Designations`, `Highly Cited Status`, `Hot Paper Status`, `Publication Campus`, `Unified Publisher`, Resource, `Number of Pages`, `Reprint Addresses`) 
+
+utmSmallB <- scopus |>
+  filter(`Publication Campus` == 'UT Martin') |>
+  select(Authors, Title, Year, DOI, `Source title`, Link, Affiliations, Publisher, Sponsors, ISSN, ISBN, `PubMed ID`, `Document Type`, `Publication Campus`, `Unified Publisher`, Resource, `Open Access`, `Funding Details`, `Page count`, `Correspondence Address`) |>
+  mutate(`Page count` = as.numeric(`Page count`))
+
+utmSmallC <- dimensions |>
+  filter(`Publication Campus` == 'UT Martin') |>
+  select(DOI, ISBN, Title, Funding, Publisher, `Source title`, ISSN, `Publication date`, PubYear, `Open Access`, `Publication Type`, `Document Type`, Authors, `Corresponding Authors`, `Authors Affiliations`, Funder, `Times cited`, `Publication Campus`, `Unified Publisher`, PMID, Resource, `Units of Assessment`, `Funder Group`, Pagination, `Corresponding Authors`) |>
+  mutate(`Page count` = ifelse(length(str_split(dimensions$Pagination[1], "-")[[1]]) != 2, NA, as.numeric(str_split(dimensions$Pagination[1], "-")[[1]][2]) - as.numeric(str_split(dimensions$Pagination[1], "-")[[1]][1])))
+
+utmSmallD <- openAlex |>
+  filter(`Publication Campus` == 'UT Martin') |>
+  mutate(`Page count` = ifelse(is.na(last_page) == TRUE | is.na(first_page) == TRUE, 0, as.numeric(last_page) - as.numeric(first_page)),
+         doi = substring(doi, 17, length(doi)),
+         PubMedID = NA,
+         Funding = NA,
+         ISBN = NA)
+```
+
+
+## Clean Up Columns
+
+```{r}
+utmCleanA <- utmSmallA |>
+  select(DOI, `Article Title`, Resource, `Publication Year`, `Unified Publisher`, `Open Access Designations`, `Pubmed Id`, Authors, `Source Title`, `Document Type`, `Research Areas`, `Times Cited, All Databases`, Affiliations, `Funding Orgs`, ISSN, ISBN, `Number of Pages`, `Reprint Addresses`) |>
+  mutate(`Source Title` = str_to_title(`Source Title`),
+         `Number of Pages` = ifelse(is.na(`Number of Pages`) == TRUE, 0, `Number of Pages`),
+         APC = NA_integer_)
+
+utmCleanB <- utmSmallB |>
+  select(DOI, Title, Resource, Year, `Unified Publisher`, `Open Access`, `PubMed ID`, Authors, `Source title`, `Document Type`, Affiliations, `Funding Details`, ISSN, ISBN, `Page count`, `Correspondence Address`) |>
+  mutate(`Research Areas` = NA,
+         `Times Cited` = 0,
+         `Page count` = ifelse(is.na(`Page count`) == TRUE, 0, `Page count`),
+         APC = NA_integer_)
+
+utmCleanC <- utmSmallC |>
+  select(DOI, Title, Resource, PubYear, `Unified Publisher`, `Open Access`, PMID, Authors, `Source title`, `Document Type`, `Units of Assessment`, `Times cited`, `Authors Affiliations`, `Funder Group`, ISSN, ISBN, `Page count`, `Corresponding Authors`) |>
+  mutate(`Research Areas` = substr(`Units of Assessment`, 5, nchar(`Units of Assessment`)),
+         `Page count` = ifelse(is.na(`Page count`) == TRUE, 0, `Page count`),
+         APC = NA_integer_) |>
+  select(DOI, Title, Resource, PubYear, `Unified Publisher`, `Open Access`, PMID, Authors, `Source title`, `Document Type`, `Research Areas`, `Times cited`, `Authors Affiliations`, `Funder Group`, ISSN, ISBN, `Page count`, `Corresponding Authors`, APC)
+
+utmCleanD <- utmSmallD |>
+  select(doi, title, `Publication Source`, publication_year, `Unified Publisher`, oa_status, PubMedID, Authors, source_display_name, type, Subjects, cited_by_count, Affiliations, Funding, issn_l, ISBN, `Page count`, isCorrespondingAuthor, APC) |>
+  mutate(isCorrespondingAuthor = ifelse(isCorrespondingAuthor == 'Yes', 'UT Martin', isCorrespondingAuthor))
+
+colnames(utmCleanA) <- c('DOI', 'Title', 'Resource', 'Year', 'Unified Publisher', 'Open Access', 'PubMed ID', 'Authors', 'Source title', 'Document Type', 'Research Areas', 'Times Cited', 'Affiliations', 'Funding Details', 'ISSN', 'ISBN', 'Page count', 'Correspondence Address', 'APC')
+colnames(utmCleanC) <- c('DOI', 'Title', 'Resource', 'Year', 'Unified Publisher', 'Open Access', 'PubMed ID', 'Authors', 'Source title', 'Document Type', 'Research Areas', 'Times Cited', 'Affiliations', 'Funding Details', 'ISSN', 'ISBN', 'Page count', 'Correspondence Address', 'APC')
+colnames(utmCleanD) <- c('DOI', 'Title', 'Resource', 'Year', 'Unified Publisher', 'Open Access', 'PubMed ID', 'Authors', 'Source title', 'Document Type', 'Research Areas', 'Times Cited', 'Affiliations', 'Funding Details', 'ISSN', 'ISBN', 'Page count', 'Correspondence Address', 'APC')
+```
+
+
+## Row Bind the Tables
+
+```{r}
+utmFull <- rbind(utmCleanA, utmCleanB, utmCleanC, utmCleanD)
+```
+
+
+## Clean Final Table
+
+```{r}
+utmFinal <- utmFull |>
+  group_by(DOI) |>
+  summarise(locationCount = length(unique(Resource)),
+            locationA = Resource[1],
+            locationB = ifelse(length(unique(Resource)) == 1, '', Resource[2]),
+            locationC = ifelse(length(unique(Resource)) < 3, '', Resource[3]),
+            locationD = ifelse(length(unique(Resource)) == 4, Resource[4], ''),
+            pubYear = min(Year),
+            `Unified Publisher` = `Unified Publisher`[1],
+            OA1 = `Open Access`[1],
+            OA2 = ifelse(length(unique(Resource)) == 1, '', `Open Access`[2]),
+            OA3 = ifelse(length(unique(Resource)) < 3, '', `Open Access`[3]),
+            OA4 = ifelse(length(unique(Resource)) == 4, `Open Access`[4], ''),
+            PubMedID = ifelse(is.na(`PubMed ID`[1]) == FALSE, `PubMed ID`[1],
+                              ifelse(is.na(`PubMed ID`[2]) == FALSE, `PubMed ID`[2],
+                                           ifelse(is.na(`PubMed ID`[3]) == FALSE, `PubMed ID`[3], `PubMed ID`[4]))),
+            Authors = ifelse(is.na(`Authors`[1]) == FALSE, Authors[1],
+                              ifelse(is.na(Authors[2]) == FALSE, Authors[2],
+                                           ifelse(is.na(Authors[3]) == FALSE, Authors[3], Authors[4]))),
+            NumAuthors = ifelse(Resource[1] == 'OpenAlex', length(str_split(Authors[1], ',')[[1]]), length(str_split(Authors[1], ';')[[1]])),
+            SourceTitleA = `Source title`[1],
+            SourceTitleB = ifelse(length(unique(Resource)) == 1, '', `Source title`[2]),
+            SourceTitleC = ifelse(length(unique(Resource)) < 3, '', `Source title`[3]),
+            SourceTitleD = ifelse(length(unique(Resource)) == 4, `Source title`[4], ''),
+            DocumentType = `Document Type`[1],
+            ResearchArea1 = `Research Areas`[1],
+            ResearchArea2 = ifelse(length(unique(Resource)) == 1, '', `Research Areas`[2]),
+            ResearchArea3 = ifelse(length(unique(Resource)) < 3, '', `Research Areas`[3]),
+            ResearchArea4 = ifelse(length(unique(Resource)) == 4, `Research Areas`[4], ''),
+            TimesCited = max(`Times Cited`, na.rm = TRUE),
+            Affiliation1 = Affiliations[1],
+            Affiliation2 = ifelse(length(unique(Resource)) == 1, '', Affiliations[2]),
+            Affiliation3 = ifelse(length(unique(Resource)) < 3, '', Affiliations[3]),
+            Affiliation4 = ifelse(length(unique(Resource)) == 4, Affiliations[4], ''),
+            FundingDetails1 = `Funding Details`[1],
+            FundingDetails2 = ifelse(length(unique(Resource)) == 1, '', `Funding Details`[2]),
+            FundingDetails3 = ifelse(length(unique(Resource)) < 3, '', `Funding Details`[3]),
+            FundingDetails4 = ifelse(length(unique(Resource)) == 4, `Funding Details`[4], ''),
+            ISBN1 = ISBN[1],
+            ISBN2 = ifelse(length(unique(Resource)) == 1, '', ISBN[2]),
+            ISBN3 = ifelse(length(unique(Resource)) < 3, '', ISBN[3]),
+            ISBN4 = ifelse(length(unique(Resource)) == 4, ISBN[4], ''),
+            ISSN1 = ISSN[1],
+            ISSN2 = ifelse(length(unique(Resource)) == 1, '', ISSN[2]),
+            ISSN3 = ifelse(length(unique(Resource)) < 3, '', ISSN[3]),
+            ISSN4 = ifelse(length(unique(Resource)) == 4, ISSN[4], ''),
+            pageCount1 = `Page count`[1],
+            pageCount2 = `Page count`[2],
+            pageCount3 = `Page count`[3],
+            pageCount4 = `Page count`[4],
+            Title = Title[1],
+            isCA1 = ifelse(grepl('Martin', `Correspondence Address`[1], ignore.case = TRUE) == TRUE | `Correspondence Address`[1] == 'Yes', 1, 0),
+            isCA2 = ifelse(grepl('Martin', `Correspondence Address`[2], ignore.case = TRUE) == TRUE | `Correspondence Address`[2] == 'Yes', 1, 0),
+            isCA3 = ifelse(grepl('Martin', `Correspondence Address`[3], ignore.case = TRUE) == TRUE | `Correspondence Address`[3] == 'Yes', 1, 0),
+            isCA4 = ifelse(grepl('Martin', `Correspondence Address`[4], ignore.case = TRUE) == TRUE | `Correspondence Address`[4] == 'Yes', 1, 0),
+            apcCost = ifelse(length(unique(Resource)) == sum(is.na(APC)), NA_integer_, sum(APC, na.rm = TRUE))) |>
+  mutate(isCA1 = ifelse(is.na(isCA1) == TRUE, 0, isCA1),
+         isCA2 = ifelse(is.na(isCA2) == TRUE, 0, isCA2),
+         isCA3 = ifelse(is.na(isCA3) == TRUE, 0, isCA3),
+         isCA4 = ifelse(is.na(isCA4) == TRUE, 0, isCA4)) |>
+  mutate(OpenAccess = case_when(
+          OA4 == 'closed' | OA3 == 'Closed' | OA2 == 'Closed' | OA1 == 'Closed' ~ 'Closed',
+          str_detect(OA4, 'diamond') | str_detect(OA3, 'diamond') | str_detect(OA2, 'diamond') | str_detect(OA1, 'diamond') ~ 'Diamond',
+          str_detect(OA4, 'hybrid') | str_detect(OA3, 'Hybrid') | str_detect(OA2, 'Hybrid') | str_detect(OA1, 'Hybrid') | str_detect(OA1, 'hybrid') ~ 'Hybrid',
+          str_detect(OA4, 'gold') | str_detect(OA3, 'Gold') | str_detect(OA2, 'Gold') | str_detect(OA1, 'Gold') | str_detect(OA1, 'gold')  ~ 'Gold',
+          str_detect(OA4, 'bronze') | str_detect(OA3, 'Bronze') | str_detect(OA2, 'Bronze') | str_detect(OA1, 'Bronze') ~ 'Bronze',
+          str_detect(OA4, 'green') | str_detect(OA3, 'Green') | str_detect(OA2, 'Green') | str_detect(OA1, 'Green') ~ 'Green',
+          .default = 'Not Given'
+        ),
+        pageCount = pmax(pageCount1, pageCount2, pageCount3, pageCount4, na.rm = TRUE),
+        SourceTitle = case_when(
+          SourceTitleD != '' ~ SourceTitleD,
+          SourceTitleC != '' ~ SourceTitleC,
+          SourceTitleB != '' ~ SourceTitleB,
+          SourceTitleA != '' ~ SourceTitleA,
+          .default = 'Not Given'
+        ),
+        ResearchArea = case_when(
+          ResearchArea4 != '' ~ ResearchArea4,
+          ResearchArea3 != '' ~ ResearchArea3,
+          ResearchArea2 != '' ~ ResearchArea2,
+          ResearchArea1 != '' ~ ResearchArea1,
+          .default = 'Not Given'
+        ),
+        Affiliation = case_when(
+          Affiliation4 != '' ~ Affiliation4,
+          Affiliation3 != '' ~ Affiliation3,
+          Affiliation2 != '' ~ Affiliation2,
+          Affiliation1 != '' ~ Affiliation1,
+          .default = 'Not Given'
+        ),
+        FundingDetails = case_when(
+          FundingDetails4 != '' ~ FundingDetails4,
+          FundingDetails3 != '' ~ FundingDetails3,
+          FundingDetails2 != '' ~ FundingDetails2,
+          FundingDetails1 != '' ~ FundingDetails1,
+          .default = 'Not Given'
+        ),
+        ISSN = case_when(
+          ISSN4 != '' ~ ISSN4,
+          ISSN3 != '' ~ ISSN3,
+          ISSN2 != '' ~ ISSN2,
+          ISSN1 != '' ~ ISSN1,
+          .default = 'Not Given'
+        ),
+        ISBN = case_when(
+          ISBN4 != '' ~ ISBN4,
+          ISBN3 != '' ~ ISBN3,
+          ISBN2 != '' ~ ISBN2,
+          ISBN1 != '' ~ ISBN1,
+          .default = 'Not Given'
+        ),
+        isCorrespondingAuthor = ifelse(isCA1 == 1 | isCA2 == 1 | isCA3 == 1 | isCA4 == 1, 1, 0),
+        Databases = paste0(locationA, ', ', locationB, ', ', locationC)) |>
+  mutate(Databases = str_replace(Databases, ",,", ",")) |>
+  mutate(Databases = str_replace(Databases, " ,", ",")) |>
+  mutate(Databases = str_replace(Databases, ",,", "")) |>
+  mutate(Databases = ifelse(
+    substr(Databases, nchar(Databases) - 1, nchar(Databases)) == ', ', substr(Databases, 1, nchar(Databases) - 2), Databases
+  )) |>
+  mutate(`Unified Document Type` = case_when(
+    DocumentType %in% c('Review', 'Review Article', 'Book Review', 'Review; Book Chapter', 'Review; Early Access', 'Art Exhibit Review', 'Music Performance Review', 'Theater Review', 'Book Review; Early Access', 'Film Review', 'Art Exhibit Review', 'Book Review; Book Chapter', 'Database Review', 'review', 'peer-review') ~ 'Review',
+    DocumentType %in% c('Article', 'Research Article', 'Article; Early Access', 'Article; Data Paper', 'Article; Publication with Expression of Concern', 'Article in press', 'article', 'preprint', 'report', 'dissertation') ~ 'Article',
+    DocumentType %in% c('Book', 'Book chapter', 'Article; Book Chapter', 'Fiction, Creative Prose', 'Biographical-Item; Book Chapter', 'book-chapter', 'book') ~ 'Book',
+    DocumentType %in% c('Letter', 'Letter To Editor', 'Letter to Editor', 'Editorial', 'Editorial Material', 'Editorial Material; Early Access', 'Editorial Material; Book Chapter', 'Letter; Early Access', 'editorial', 'letter') ~ 'Editorial Material',
+    DocumentType %in% c('Correction', 'Correction; Book Chapter', 'Correction Erratum', 'Correction; Early Access') ~ 'Correction',
+    DocumentType %in% c('Conference paper', 'Proceedings Paper', 'Article; Proceedings Paper') ~ 'Proceedings Paper',
+    DocumentType %in% c('Conference Abstract', 'Meeting Abstract') ~ 'Abstract',
+    .default = 'Other'
+  )) |>
+  mutate(ResearchArea = sapply(ResearchArea, function(x) paste(unique(unlist(str_split(x," , "))), collapse = ", "))) |>
+  select(DOI, locationCount, pubYear, `Unified Publisher`, Databases, OpenAccess, PubMedID, Authors, NumAuthors, SourceTitle, DocumentType, `Unified Document Type`, ResearchArea, TimesCited, Affiliation, ISSN, ISBN, pageCount, Title, isCorrespondingAuthor, apcCost) |>
+  mutate(`Publication Campus` = 'UT Martin')
+
+
+for (i in 1:dim(utmFinal)[1]){
+  utmFinal$isFirstAuthor[i] = ifelse(grepl('University of Tennessee at Martin', str_split(utmFinal$Affiliation[i], ';')[[1]][1], fixed = TRUE) == TRUE |
+                                     grepl('University of Tennessee at Martin', str_split(utmFinal$Affiliation[i], '\\);')[[1]][1], fixed = TRUE) == TRUE |
+                                     grepl('University of Tennessee System', str_split(utmFinal$Affiliation[i], ';')[[1]][1], fixed = TRUE) == TRUE , 1, 0)
+  utmFinal$isLastAuthor[i] = ifelse(grepl('University of Tennessee at Martin', str_split(utmFinal$Affiliation[i], ';')[[1]][length(str_split(utmFinal$Affiliation[i], ';')[[1]])], fixed = TRUE) == TRUE |
+                                    grepl('University of Tennessee at Martin', str_split(utmFinal$Affiliation[i], '\\);')[[1]][length(str_split(utmFinal$Affiliation[i], '\\);')[[1]])], fixed = TRUE) == TRUE |
+                                    grepl('University of Tennessee System', str_split(utmFinal$Affiliation[i], ';')[[1]][length(str_split(utmFinal$Affiliation[i], ';')[[1]])], fixed = TRUE) == TRUE  , 1, 0) 
+}
+  
+
+utmFinal
+```
+
+
+
+
+## Export to the Database
+
+
+```{r}
+dbWriteTable(con, name = 'full_pubs_utm', value = utmFinal, append = FALSE, overwrite = TRUE)
+```
+
+
+
+
+
+
+
+# UT Knoxville Publications
+
+```{r, warning = FALSE}
+utkSmallA <- webOfScience |>
+  filter(`Publication Campus` == 'UT Knoxville') |>
+  select(`Publication Type`, Authors, `Source Title`, `Book Author Full Names`, `Article Title`, `Document Type`, Affiliations, ORCIDs, `Funding Orgs`, `Cited Reference Count`, `Times Cited, All Databases`, Publisher, ISSN, eISSN, ISBN, `Publication Date`, `Publication Year`, DOI, `DOI Link`, `Book DOI`, `WoS Categories`, `Research Areas`, `Pubmed Id`, `Open Access Designations`, `Highly Cited Status`, `Hot Paper Status`, `Publication Campus`, `Unified Publisher`, Resource, `Number of Pages`, `Reprint Addresses`)
+
+utkSmallB <- scopus |>
+  filter(`Publication Campus` == 'UT Knoxville') |>
+  select(Authors, Title, Year, DOI, `Source title`, Link, Affiliations, Publisher, Sponsors, ISSN, ISBN, `PubMed ID`, `Document Type`, `Publication Campus`, `Unified Publisher`, Resource, `Open Access`, `Funding Details`, `Page count`, `Correspondence Address`) |>
+  mutate(`Page count` = as.numeric(`Page count`))
+
+utkSmallC <- dimensions |>
+  filter(`Publication Campus` == 'UT Knoxville') |>
+  select(DOI, ISBN, Title, Funding, Publisher, `Source title`, ISSN, `Publication date`, PubYear, `Open Access`, `Publication Type`, `Document Type`, Authors, `Corresponding Authors`, `Authors Affiliations`, Funder, `Times cited`, `Publication Campus`, `Unified Publisher`, PMID, Resource, `Units of Assessment`, `Funder Group`, Pagination, `Corresponding Authors`) |>
+  mutate(`Page count` = ifelse(length(str_split(dimensions$Pagination[1], "-")[[1]]) != 2, NA, as.numeric(str_split(dimensions$Pagination[1], "-")[[1]][2]) - as.numeric(str_split(dimensions$Pagination[1], "-")[[1]][1])))
+
+utkSmallD <- openAlex |>
+  filter(`Publication Campus` == 'UT Knoxville') |>
+  mutate(`Page count` = ifelse(is.na(last_page) == TRUE | is.na(first_page) == TRUE, 0, as.numeric(last_page) - as.numeric(first_page)),
+         doi = substring(doi, 17, length(doi)),
+         PubMedID = NA,
+         Funding = NA,
+         ISBN = NA)
+```
+
+
+## Clean Up Columns
+
+```{r}
+utkCleanA <- utkSmallA |>
+  select(DOI, `Article Title`, Resource, `Publication Year`, `Unified Publisher`, `Open Access Designations`, `Pubmed Id`, Authors, `Source Title`, `Document Type`, `Research Areas`, `Times Cited, All Databases`, Affiliations, `Funding Orgs`, ISSN, ISBN, `Number of Pages`, `Reprint Addresses`) |>
+  mutate(`Source Title` = str_to_title(`Source Title`),
+         `Number of Pages` = ifelse(is.na(`Number of Pages`) == TRUE, 0, `Number of Pages`),
+         APC = NA_integer_)
+
+utkCleanB <- utkSmallB |>
+  select(DOI, Title, Resource, Year, `Unified Publisher`, `Open Access`, `PubMed ID`, Authors, `Source title`, `Document Type`, Affiliations, `Funding Details`, ISSN, ISBN, `Page count`, `Correspondence Address`) |>
+  mutate(`Research Areas` = NA,
+         `Times Cited` = 0,
+         `Page count` = ifelse(is.na(`Page count`) == TRUE, 0, `Page count`),
+         APC = NA_integer_)
+
+utkCleanC <- utkSmallC |>
+  select(DOI, Title, Resource, PubYear, `Unified Publisher`, `Open Access`, PMID, Authors, `Source title`, `Document Type`, `Units of Assessment`, `Times cited`, `Authors Affiliations`, `Funder Group`, ISSN, ISBN, `Page count`, `Corresponding Authors`) |>
+  mutate(`Research Areas` = substr(`Units of Assessment`, 5, nchar(`Units of Assessment`)),
+         `Page count` = ifelse(is.na(`Page count`) == TRUE, 0, `Page count`),
+         APC = NA_integer_) |>
+  select(DOI, Title, Resource, PubYear, `Unified Publisher`, `Open Access`, PMID, Authors, `Source title`, `Document Type`, `Research Areas`, `Times cited`, `Authors Affiliations`, `Funder Group`, ISSN, ISBN, `Page count`, `Corresponding Authors`, APC)
+
+utkCleanD <- utkSmallD |>
+  select(doi, title, `Publication Source`, publication_year, `Unified Publisher`, oa_status, PubMedID, Authors, source_display_name, type, Subjects, cited_by_count, Affiliations, Funding, issn_l, ISBN, `Page count`, isCorrespondingAuthor, APC) |>
+  mutate(isCorrespondingAuthor = ifelse(isCorrespondingAuthor == 'Yes', 'UT Knoxville', isCorrespondingAuthor))
+
+colnames(utkCleanA) <- c('DOI', 'Title', 'Resource', 'Year', 'Unified Publisher', 'Open Access', 'PubMed ID', 'Authors', 'Source title', 'Document Type', 'Research Areas', 'Times Cited', 'Affiliations', 'Funding Details', 'ISSN', 'ISBN', 'Page count', 'Correspondence Address', 'APC')
+colnames(utkCleanC) <- c('DOI', 'Title', 'Resource', 'Year', 'Unified Publisher', 'Open Access', 'PubMed ID', 'Authors', 'Source title', 'Document Type', 'Research Areas', 'Times Cited', 'Affiliations', 'Funding Details', 'ISSN', 'ISBN', 'Page count', 'Correspondence Address', 'APC')
+colnames(utkCleanD) <- c('DOI', 'Title', 'Resource', 'Year', 'Unified Publisher', 'Open Access', 'PubMed ID', 'Authors', 'Source title', 'Document Type', 'Research Areas', 'Times Cited', 'Affiliations', 'Funding Details', 'ISSN', 'ISBN', 'Page count', 'Correspondence Address', 'APC')
+```
+
+
+## Row Bind the Tables
+
+```{r}
+utkFull <- rbind(utkCleanA, utkCleanB, utkCleanC, utkCleanD)
+```
+
+
+## Clean Final Table
+
+```{r}
+utkFinal <- utkFull |>
+  group_by(DOI) |>
+  summarise(locationCount = length(unique(Resource)),
+            locationA = Resource[1],
+            locationB = ifelse(length(unique(Resource)) == 1, '', Resource[2]),
+            locationC = ifelse(length(unique(Resource)) < 3, '', Resource[3]),
+            locationD = ifelse(length(unique(Resource)) == 4, Resource[4], ''),
+            pubYear = min(Year),
+            `Unified Publisher` = `Unified Publisher`[1],
+            OA1 = `Open Access`[1],
+            OA2 = ifelse(length(unique(Resource)) == 1, '', `Open Access`[2]),
+            OA3 = ifelse(length(unique(Resource)) < 3, '', `Open Access`[3]),
+            OA4 = ifelse(length(unique(Resource)) == 4, `Open Access`[4], ''),
+            PubMedID = ifelse(is.na(`PubMed ID`[1]) == FALSE, `PubMed ID`[1],
+                              ifelse(is.na(`PubMed ID`[2]) == FALSE, `PubMed ID`[2],
+                                           ifelse(is.na(`PubMed ID`[3]) == FALSE, `PubMed ID`[3], `PubMed ID`[4]))),
+            Authors1 = Authors[1],
+            Authors2 = Authors[2], 
+            Authors3 = Authors[3],
+            Authors4 = Authors[4],
+            Authors = ifelse(is.na(`Authors`[1]) == FALSE, Authors[1],
+                              ifelse(is.na(Authors[2]) == FALSE, Authors[2],
+                                           ifelse(is.na(Authors[3]) == FALSE, Authors[3], Authors[4]))),
+            NumAuthors = ifelse(Resource[1] == 'OpenAlex', length(str_split(Authors[1], ',')[[1]]), length(str_split(Authors[1], ';')[[1]])),
+            SourceTitleA = `Source title`[1],
+            SourceTitleB = ifelse(length(unique(Resource)) == 1, '', `Source title`[2]),
+            SourceTitleC = ifelse(length(unique(Resource)) < 3, '', `Source title`[3]),
+            SourceTitleD = ifelse(length(unique(Resource)) == 4, `Source title`[4], ''),
+            DocumentType = `Document Type`[1],
+            ResearchArea1 = `Research Areas`[1],
+            ResearchArea2 = ifelse(length(unique(Resource)) == 1, '', `Research Areas`[2]),
+            ResearchArea3 = ifelse(length(unique(Resource)) < 3, '', `Research Areas`[3]),
+            ResearchArea4 = ifelse(length(unique(Resource)) == 4, `Research Areas`[4], ''),
+            TimesCited = max(`Times Cited`, na.rm = TRUE),
+            Affiliation1 = Affiliations[1],
+            Affiliation2 = ifelse(length(unique(Resource)) == 1, '', Affiliations[2]),
+            Affiliation3 = ifelse(length(unique(Resource)) < 3, '', Affiliations[3]),
+            Affiliation4 = ifelse(length(unique(Resource)) == 4, Affiliations[4], ''),
+            FundingDetails1 = `Funding Details`[1],
+            FundingDetails2 = ifelse(length(unique(Resource)) == 1, '', `Funding Details`[2]),
+            FundingDetails3 = ifelse(length(unique(Resource)) < 3, '', `Funding Details`[3]),
+            FundingDetails4 = ifelse(length(unique(Resource)) == 4, `Funding Details`[4], ''),
+            ISBN1 = ISBN[1],
+            ISBN2 = ifelse(length(unique(Resource)) == 1, '', ISBN[2]),
+            ISBN3 = ifelse(length(unique(Resource)) < 3, '', ISBN[3]),
+            ISBN4 = ifelse(length(unique(Resource)) == 4, ISBN[4], ''),
+            ISSN1 = ISSN[1],
+            ISSN2 = ifelse(length(unique(Resource)) == 1, '', ISSN[2]),
+            ISSN3 = ifelse(length(unique(Resource)) < 3, '', ISSN[3]),
+            ISSN4 = ifelse(length(unique(Resource)) == 4, ISSN[4], ''),
+            pageCount1 = `Page count`[1],
+            pageCount2 = `Page count`[2],
+            pageCount3 = `Page count`[3],
+            pageCount4 = `Page count`[4],
+            Title = Title[1],
+            isCA1 = ifelse(grepl('Univ Tennessee', `Correspondence Address`[1], ignore.case = TRUE) == TRUE | grepl('University of Tennessee, Knoxville', `Correspondence Address`[1], ignore.case = TRUE) == TRUE | grepl('University of Tennessee Knoxville', `Correspondence Address`[1], ignore.case = TRUE) == TRUE | grepl('Tennessee at Knoxville', `Correspondence Address`[1], ignore.case = TRUE) == TRUE | grepl('Knoxville', `Correspondence Address`[1], ignore.case = TRUE) == TRUE, 1, 0),
+            isCA2 = ifelse(grepl('Univ Tennessee', `Correspondence Address`[2], ignore.case = TRUE) == TRUE | grepl('University of Tennessee, Knoxville', `Correspondence Address`[2], ignore.case = TRUE) == TRUE | grepl('University of Tennessee Knoxville', `Correspondence Address`[2], ignore.case = TRUE) == TRUE | grepl('Tennessee at Knoxville', `Correspondence Address`[2], ignore.case = TRUE) == TRUE | grepl('Knoxville', `Correspondence Address`[2], ignore.case = TRUE) == TRUE, 1, 0),
+            isCA3 = ifelse(grepl('Univ Tennessee', `Correspondence Address`[3], ignore.case = TRUE) == TRUE | grepl('University of Tennessee, Knoxville', `Correspondence Address`[3], ignore.case = TRUE) == TRUE | grepl('University of Tennessee Knoxville', `Correspondence Address`[3], ignore.case = TRUE) == TRUE | grepl('Tennessee at Knoxville', `Correspondence Address`[3], ignore.case = TRUE) == TRUE | grepl('Knoxville', `Correspondence Address`[3], ignore.case = TRUE) == TRUE, 1, 0),
+            isCA4 = ifelse(grepl('Univ Tennessee', `Correspondence Address`[4], ignore.case = TRUE) == TRUE | grepl('University of Tennessee, Knoxville', `Correspondence Address`[4], ignore.case = TRUE) == TRUE | grepl('University of Tennessee Knoxville', `Correspondence Address`[4], ignore.case = TRUE) == TRUE | grepl('Tennessee at Knoxville', `Correspondence Address`[4], ignore.case = TRUE) == TRUE | grepl('Knoxville', `Correspondence Address`[4], ignore.case = TRUE) == TRUE, 1, 0),
+            apcCost = ifelse(length(unique(Resource)) == sum(is.na(APC)), NA_integer_, sum(APC, na.rm = TRUE))) |>
+  mutate(isCA1 = ifelse(is.na(isCA1) == TRUE, 0, isCA1),
+         isCA2 = ifelse(is.na(isCA2) == TRUE, 0, isCA2),
+         isCA3 = ifelse(is.na(isCA3) == TRUE, 0, isCA3),
+         isCA4 = ifelse(is.na(isCA4) == TRUE, 0, isCA4)) |>
+  mutate(OpenAccess = case_when(
+          OA4 == 'closed' | OA3 == 'Closed' | OA2 == 'Closed' | OA1 == 'Closed' ~ 'Closed',
+          str_detect(OA4, 'diamond') | str_detect(OA3, 'diamond') | str_detect(OA2, 'diamond') | str_detect(OA1, 'diamond') ~ 'Diamond',
+          str_detect(OA4, 'hybrid') | str_detect(OA3, 'Hybrid') | str_detect(OA2, 'Hybrid') | str_detect(OA1, 'Hybrid') | str_detect(OA1, 'hybrid') ~ 'Hybrid',
+          str_detect(OA4, 'gold') | str_detect(OA3, 'Gold') | str_detect(OA2, 'Gold') | str_detect(OA1, 'Gold') | str_detect(OA1, 'gold')  ~ 'Gold',
+          str_detect(OA4, 'bronze') | str_detect(OA3, 'Bronze') | str_detect(OA2, 'Bronze') | str_detect(OA1, 'Bronze') ~ 'Bronze',
+          str_detect(OA4, 'green') | str_detect(OA3, 'Green') | str_detect(OA2, 'Green') | str_detect(OA1, 'Green') ~ 'Green',
+          .default = 'Not Given'
+        ),
+        pageCount = pmax(pageCount1, pageCount2, pageCount3, pageCount4, na.rm = TRUE),
+        SourceTitle = case_when(
+          SourceTitleD != '' ~ SourceTitleD,
+          SourceTitleC != '' ~ SourceTitleC,
+          SourceTitleB != '' ~ SourceTitleB,
+          SourceTitleA != '' ~ SourceTitleA,
+          .default = 'Not Given'
+        ),
+        ResearchArea = case_when(
+          ResearchArea4 != '' ~ ResearchArea4,
+          ResearchArea3 != '' ~ ResearchArea3,
+          ResearchArea2 != '' ~ ResearchArea2,
+          ResearchArea1 != '' ~ ResearchArea1,
+          .default = 'Not Given'
+        ),
+        Affiliation = case_when(
+          Affiliation4 != '' ~ Affiliation4,
+          Affiliation3 != '' ~ Affiliation3,
+          Affiliation2 != '' ~ Affiliation2,
+          Affiliation1 != '' ~ Affiliation1,
+          .default = 'Not Given'
+        ),
+        FundingDetails = case_when(
+          FundingDetails4 != '' ~ FundingDetails4,
+          FundingDetails3 != '' ~ FundingDetails3,
+          FundingDetails2 != '' ~ FundingDetails2,
+          FundingDetails1 != '' ~ FundingDetails1,
+          .default = 'Not Given'
+        ),
+        ISSN = case_when(
+          ISSN4 != '' ~ ISSN4,
+          ISSN3 != '' ~ ISSN3,
+          ISSN2 != '' ~ ISSN2,
+          ISSN1 != '' ~ ISSN1,
+          .default = 'Not Given'
+        ),
+        ISBN = case_when(
+          ISBN4 != '' ~ ISBN4,
+          ISBN3 != '' ~ ISBN3,
+          ISBN2 != '' ~ ISBN2,
+          ISBN1 != '' ~ ISBN1,
+          .default = 'Not Given'
+        ),
+        isCorrespondingAuthor = ifelse(isCA1 == 1 | isCA2 == 1 | isCA3 == 1 | isCA4 == 1, 1, 0),
+        Databases = paste0(locationA, ', ', locationB, ', ', locationC)) |>
+  mutate(Databases = str_replace(Databases, ",,", ",")) |>
+  mutate(Databases = str_replace(Databases, " ,", ",")) |>
+  mutate(Databases = str_replace(Databases, ",,", "")) |>
+  mutate(Databases = ifelse(
+    substr(Databases, nchar(Databases) - 1, nchar(Databases)) == ', ', substr(Databases, 1, nchar(Databases) - 2), Databases
+  )) |>
+  mutate(`Unified Document Type` = case_when(
+    DocumentType %in% c('Review', 'Review Article', 'Book Review', 'Review; Book Chapter', 'Review; Early Access', 'Art Exhibit Review', 'Music Performance Review', 'Theater Review', 'Book Review; Early Access', 'Film Review', 'Art Exhibit Review', 'Book Review; Book Chapter', 'Database Review', 'review', 'peer-review') ~ 'Review',
+    DocumentType %in% c('Article', 'Research Article', 'Article; Early Access', 'Article; Data Paper', 'Article; Publication with Expression of Concern', 'Article in press', 'article', 'preprint', 'report', 'dissertation') ~ 'Article',
+    DocumentType %in% c('Book', 'Book chapter', 'Article; Book Chapter', 'Fiction, Creative Prose', 'Biographical-Item; Book Chapter', 'book-chapter', 'book') ~ 'Book',
+    DocumentType %in% c('Letter', 'Letter To Editor', 'Letter to Editor', 'Editorial', 'Editorial Material', 'Editorial Material; Early Access', 'Editorial Material; Book Chapter', 'Letter; Early Access', 'editorial', 'letter') ~ 'Editorial Material',
+    DocumentType %in% c('Correction', 'Correction; Book Chapter', 'Correction Erratum', 'Correction; Early Access') ~ 'Correction',
+    DocumentType %in% c('Conference paper', 'Proceedings Paper', 'Article; Proceedings Paper') ~ 'Proceedings Paper',
+    DocumentType %in% c('Conference Abstract', 'Meeting Abstract') ~ 'Abstract',
+    .default = 'Other'
+  )) |>
+  mutate(ResearchArea = sapply(ResearchArea, function(x) paste(unique(unlist(str_split(x," , "))), collapse = ", "))) |>
+  select(DOI, locationCount, pubYear, `Unified Publisher`, Databases, OpenAccess, PubMedID, Authors, NumAuthors, SourceTitle, DocumentType, `Unified Document Type`, ResearchArea, TimesCited, Affiliation, ISSN, ISBN, pageCount, Title, isCorrespondingAuthor, apcCost) |>
+  mutate(`Publication Campus` = 'UT Knoxville')
+
+for (i in 1:dim(utkFinal)[1]){
+  utkFinal$isFirstAuthor[i] = ifelse(grepl('University of Tennessee at Knoxville', str_split(utkFinal$Affiliation[i], ';')[[1]][1], fixed = TRUE) == TRUE |
+                                     grepl('University of Tennessee at Knoxville', str_split(utkFinal$Affiliation[i], '\\);')[[1]][1], fixed = TRUE) == TRUE |
+                                     grepl('University of Tennessee System', str_split(utkFinal$Affiliation[i], ';')[[1]][1], fixed = TRUE) == TRUE , 1, 0)
+  utkFinal$isLastAuthor[i] = ifelse(grepl('University of Tennessee at Knoxville', str_split(utkFinal$Affiliation[i], ';')[[1]][length(str_split(utkFinal$Affiliation[i], ';')[[1]])], fixed = TRUE) == TRUE |
+                                    grepl('University of Tennessee at Knoxville', str_split(utkFinal$Affiliation[i], '\\);')[[1]][length(str_split(utkFinal$Affiliation[i], '\\);')[[1]])], fixed = TRUE) == TRUE |
+                                    grepl('University of Tennessee System', str_split(utkFinal$Affiliation[i], ';')[[1]][length(str_split(utkFinal$Affiliation[i], ';')[[1]])], fixed = TRUE) == TRUE  , 1, 0) 
+}
+  
+  
+
+utkFinal
+```
+
+
+
+
+
+
+## Export to the Database
+
+
+```{r}
+dbWriteTable(con, name = 'full_pubs_utk', value = utkFinal, append = FALSE, overwrite = TRUE)
+```
+
+
+
+
+# Combine All Campuses
+
+
+This is for the overall publishing table and the PowerBI publishing file.
+
+
+```{r}
+utFinal <- rbind(utcFinal, uthscFinal, utmFinal, utkFinal)
+
+utFinal
+```
+
+
+
+```{r}
+dbWriteTable(con, name = 'full_pubs_utsystem', value = utFinal, append = FALSE, overwrite = TRUE)
+```
+
+
+
+# Export for PowerBI
+
+
+This section creates columns and cleans columns specifically for PowerBI integration. This includes specific PowerBI information and workarounds for the software's limitations.
+
+```{r}
+utExport <- utFinal |>
+  # Identifier Columns and Calculated Fields
+  mutate(isOAwithGreen = ifelse(OpenAccess %in% c('Closed', 'Not Given'), 0, 1),
+         isOAwithGreenPerc = ifelse(OpenAccess %in% c('Closed', 'Not Given'), 0, 1),
+         isOAwithoutGreen = ifelse(OpenAccess %in% c('Closed', 'Not Given', 'Green'), 0, 1),
+         isOAwithoutGreenPerc = ifelse(OpenAccess %in% c('Closed', 'Not Given', 'Green'), 0, 1),
+         isNotAnyOA = ifelse(OpenAccess %in% c('Closed', 'Not Given'), 1, 0),
+         isNotGoodOA = ifelse(OpenAccess %in% c('Closed', 'Not Given', 'Green'), 1, 0),
+         isBronze = ifelse(OpenAccess == 'Bronze', 1, 0),
+         isGold = ifelse(OpenAccess == 'Gold', 1, 0), 
+         isHybrid = ifelse(OpenAccess == 'Hybrid', 1, 0),
+         isGreen = ifelse(OpenAccess == 'Green', 1, 0),
+         isGreen2 = ifelse(OpenAccess == 'Green', 1, 0),
+         isDiamond = ifelse(OpenAccess == 'Diamond', 1, 0),
+         isFirstOrLast = ifelse(isFirstAuthor == 1 | isLastAuthor == 1, 1, 0),
+         isCorrespondingAuthor = ifelse(isCorrespondingAuthor == 1, 1, 0),
+         hasAPCCost = ifelse(is.na(apcCost) == FALSE, 1, 0),
+         hasAPCCostPerc = ifelse(is.na(apcCost) == FALSE, 1, 0),
+         hasAPCAndCorresponding = ifelse(is.na(apcCost) == FALSE & isCorrespondingAuthor == 1, 1, 0),
+         apcCostNumeric = ifelse(is.na(apcCost) == TRUE, 0, apcCost)) |>
+  
+  # Shortening the Authors column due to Microsoft's characters per cell limitation
+  mutate(Authors = ifelse(nchar(Authors) > 30000, paste0(substr(Authors, 1, 30000), '...'), Authors),
+         Affiliation = ifelse(nchar(Affiliation) > 30000, paste0(substr(Affiliation, 1, 30000), '...'), Affiliation),
+         apcCostUT = ifelse(hasAPCCost == 1 & isCorrespondingAuthor == 1, apcCostNumeric, 0)) |>
+  filter(is.na(DOI) == FALSE) |>
+  
+  # Final selection for the PowerBI report to improve runtime and save data usage within the report
+  select(DOI, locationCount, pubYear, `Unified Publisher`, Databases, OpenAccess, PubMedID, Authors, NumAuthors, SourceTitle, DocumentType, `Unified Document Type`, ResearchArea, TimesCited, Affiliation, ISSN, ISBN, pageCount, Title, isCorrespondingAuthor, apcCost, apcCostNumeric, apcCostUT, hasAPCCost, hasAPCCostPerc, hasAPCAndCorresponding, `Publication Campus`, isFirstAuthor, isLastAuthor, isOAwithGreen, isOAwithGreenPerc, isOAwithoutGreen, isOAwithoutGreenPerc, isNotAnyOA, isNotGoodOA, isBronze, isGold, isHybrid, isGreen, isGreen2, isDiamond, isFirstOrLast)
+
+write_xlsx(utExport, 'All Publications UT System.xlsx')
+```
+
+
+
+
+
+# Next Steps:
+
+
+### Updating the Publishing dashboard?
+
+You should be able to refresh the All Publications UT System table within your local copy of the dashboard, provided the file did not change names, did not see columns added or removed, or did not change location. Any of those may require editing or re-doing the underlying Power Query in PowerBI.
+
+
+### Also cleaning up non-UT articles?
+
+See the non-UT article code for those portions of the PowerBI report.
+
+
+### Editing the code for troubleshooting reasons?
+
+Make sure to re-upload the updated file to GitHub using a pull request.
+
+
+### Looking to use the publication data in another project?
+
+You are good to use the database tables! (The All Publications UT System file can also be used, as long as it contains all the information you need and the shortened Authors cell is not a problem. The database tables will be more comprehensive.)
