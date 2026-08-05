@@ -34,7 +34,7 @@ library(openalexR) #This package is required to access the OpenAlex API. If this
 This improves the gathering time from the API. You can input any email here; you will not receive actual emails to it.
 
 ```{r}
-options(openalexR.mailto = 'apcs@utk.edu') 
+options(openalexR.mailto = 'YOUREMAILHERE.edu') 
 ```
 
 
