@@ -1,0 +1,266 @@
+---
+title: "Publication Trends Research Code"
+author: "Alexander Harriman"
+date: "2026-05-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r, warning = FALSE}
+library(dplyr)
+library(tidyverse)
+library(readxl)
+library(writexl)
+library(ggplot2)
+library(bibliometrix) #This package is needed to run any of the functions within bibliometrix or biblioshiny. 
+
+#If using biblioshiny, run the line below
+#biblioshiny()
+```
+
+
+
+If the bibliometrix or biblioshiny packages are to be used, these citations will be necessary in the paper per the package's license:
+
+Aria, M. & Cuccurullo, C. (2017) bibliometrix: An R-tool for comprehensive science mapping analysis,
+                        Journal of Informetrics, 11(4), pp 959-975, Elsevier.
+
+Aria, M. & Cuccurullo, C. (2026) Science Mapping Analysis - A primer with Biblioshiny,
+                        McGraw-Hill, ISBN: 978-88-386-2297-7.
+
+Aria, M., Cuccurullo, C., D'Aniello L. & Spano, M. (2026) Biblioshiny and the SAAS Workflow:
+                        An integrated framework for transparent and reproducible science mapping. 
+                        A demonstration through the replication of a study,
+                        Journal of Informetrics, 20(3), Elsevier.
+               
+                        
+Important Bibliometrix Vignettes:
+
+- 'Data Importing and Converting' (https://www.bibliometrix.org/vignettes/Data-Importing-and-Converting.html)
+- 'A brief introduction to bibliometrix' (https://www.bibliometrix.org/vignettes/Introduction_to_bibliometrix.html)
+
+And the CRAN bibliometrix package manual: https://cran.r-universe.dev/bibliometrix/doc/manual.html
+                        
+
+
+## Data Test
+
+
+When downloading Web of Science data from the website, save it as either a .bib or a .txt file for ease of use in bibliometrix. The Web of Science API does not interact with this package, and thus any missing metadata from API gathering would need to be loaded using OpenAlex or Crossref (see below).
+
+```{r, warning = FALSE}
+file1 <- '2016 UTK A.txt'
+file2 <- '2016 UTK B.txt'
+file3 <- '2016 UTK C.txt'
+file4 <- '2016 UTK D.txt'
+
+pubs1 <- convert2df(file1, dbsource = 'wos', format = 'plaintext')
+pubs2 <- convert2df(file2, dbsource = 'wos', format = 'plaintext')
+pubs3 <- convert2df(file3, dbsource = 'wos', format = 'plaintext')
+pubs4 <- convert2df(file4, dbsource = 'wos', format = 'plaintext')
+
+allPubs <- rbind(pubs1, pubs2, pubs3, pubs4)
+
+write.table(allPubs, '2016 UTK Full.txt')
+```
+
+Warnings may arrive if the data gathered from Web of Science does not include the Full Record and Citations. Those missing metadata fields may be fillable via OpenAlex and Crossref (see below).
+
+
+
+
+
+## Completing Missing Metadata with OpenAlex or CrossRef
+
+Articles that have a DOI but are missing other information could use one of these sources (or both) to fill in gaps. OpenAlex and Crossref can be run together, with OpenAlex always getting priority.
+
+
+OpenAlex can fill in gaps for:
+
+- Total Citation Counts (TC)
+- Abstracts (AB)
+- Authors (AU)
+- Affiliations (C1)
+- Cited References (CR)
+- Document Types (DT)
+- Languages (LA)
+- Publication Years (PY)
+- Corresponding Authors (RP)
+- Journals (SO)
+- Titles (TI)
+
+Crossref can fill any metadata gap EXCEPT the following:
+
+- Author Keywords (DE)
+- Keywords Plus (ID)
+- Web of Science Categories (WC)
+- Citation Counts (TC)
+
+
+This means that the Author Keywords, Keywords Plus, and Web of Science Categories can not be filled with this function, even if both sources are used to fill in data gaps.
+
+If the original source of the data was OpenAlex, then running this will skip OpenAlex as a checked source.
+
+
+### Check for Missing Data
+
+This can be used to see what columns may have lost information or were not gathered in the first place. The first table looks at all metadata tags, while the second table focuses on only the metadata needed to run bibliometrix functions. The second table can be called on its own using varName$mandatoryTags, where varName is the variable the missingData() function is assigned to.
+
+```{r}
+missing <- missingData(M)
+
+missing
+```
+
+
+After running completeMetadata(), the updated metadata will be in `varName$M`. `varName$report` shows how many fields were filled by what source, while `varName$before` and `varName$after` shows the missing metadata before and after running completeMetadata().
+
+The email is not essential and nothing will be sent to it; it is typical procedure from OpenAlex pertaining their API. The batch_size can be any number up to 50, the OpenAlex max batch size.
+
+```{r}
+filled <- completeMetadata(missing, email = 'INSERT EMAIL HERE', batch_size = 50)
+
+filled$report
+
+newM <- filled$M
+```
+
+
+This could greatly speed up the gathering of articles, especially from Web of Science. Gathering articles online is a slow process that often gets choked by Web of Science itself if the data gathered is too large. The most common times Web of Science stops article gathering comes from large author counts and large amounts of cited articles from one document.
+
+By using this, we could potentially gather the key information about articles from Web of Science and let OpenAlex fill in information that may be less essential, speeding up the article gathering process. Web of Science is also not perfect with its own metadata, so this could help cut down on metadata gaps.
+
+This may also give us a more comprehensive picture of what kinds of journals are being cited by articles in Web of Science.
+
+
+
+## Bibliometric Analysis Tests
+
+
+1. Standard Bibliometric Analysis Function
+
+
+This runs a standard bibliometric analysis on the data, showing who is the most productive authors and where authors originate from for international collaborations.
+
+```{r}
+test1 <- biblioAnalysis(newM, sep = ';')
+
+summary(test1)
+plot(test1)
+```
+
+
+
+2. Bibliographic Network - Collaborations
+
+
+This creates a graph showing collaboration networks across the data. The networkPlot() function takes an item created by biblioNetwork() and creates the graph.
+
+```{r}
+test2 <- biblioNetwork(newM, analysis = 'collaboration', network = 'authors')
+
+networkPlot(test2, n = 20, type = 'kamada', Title = 'Collaboration Test Plot', labelsize = 0.5)
+```
+
+3. Bradford's Law for a University
+
+The law suggests that a large share (at least proportionally) of publishing is concentrated in a few journals, with all other journals accounting for fewer and fewer publications. 
+
+This can be used to determine the most important journals to a university, as the "Zone 1" journals are the core of the publishing present. The journals' main subject areas could align with the university's greater ideologies, missions, and areas of expertise or focus.
+
+This may also allow for talking points comparing the Bradford's Law journal subject areas to funding priorities or faculty count dispersion.
+
+```{r}
+bradford(newM)
+```
+
+
+4. Citation Frequency Distribution
+
+
+This requires information in the Cited References (CR) column. These functions look at all of the articles a researcher cited in their work and finds the exact article, the year of publication, and the journal source of those cited articles. 
+
+
+### Most Referenced Papers
+
+```{r}
+test4 <- citations(newM)
+
+data.frame(test4$Cited)
+```
+
+### Most Cited Journals
+
+```{r}
+mostCitedJournals <- data.frame(test4$Source) |>
+  group_by(test4.Source) |>
+  summarise(n = n()) |>
+  arrange(desc(n))
+
+mostCitedJournals
+```
+
+
+5. Most Dominant Authors
+
+This takes data created by the biblioAnalysis() function and finds the most dominant authors in the subset.
+
+
+```{r}
+test5 <- dominance(test1, k = 10) #k is the number of authors to focus on, in this case the top 10 most dominant
+
+test5
+```
+
+
+6. Network Summary Statistics
+
+The networkStat() function takes a biblioNetwork() generated object and generates summary statistics on how connected the entire network is.
+
+```{r}
+test6 <- networkStat(test2, stat = 'network', type = 'degree')
+
+test6
+```
+
+
+7. Bibliometrix Summary Statistics
+
+After creating an item using biblioAnalysis(), running summary() on it returns a series of summary statistics on the analyzed data, such as annual growth rate, collaboration metrics, general citation averages, most productive authors, most commonly-published journals, most cited articles, etc. 
+
+
+```{r}
+summary(test1)
+```
+
+
+8. Three Fields Plot
+
+The three fields plot compares three different variables to each other via a Sankey diagram. This defaults to Author Keywords (DE), Authors (AU), and Journals (SO) as the three variables. Each of the three can have separate item counts for plotting within the n argument.
+
+
+```{r}
+threeFieldsPlot(newM, fields = c('DE', 'AU', 'SO'), n = c(20, 25, 20))
+```
+
+
+9. Calculating Normalized Citation Scores
+
+This can take a series of documents and find the Normalized Local Citation Score (if impact.measure = 'local') or the Normalized Global Citation Score (impact.measure = 'global') for a set of documents or series of authors.
+
+This could be useful in showing the wider impact of the top publications from the universities, and showing where those may have been published, what topics they cover, etc. 
+
+```{r}
+test9 <- normalizeCitationScore(newM, field = 'documents', impact.measure = 'global') 
+
+test9 <- test9 |>
+  arrange(desc(MNGCS))
+
+test9
+```
+
