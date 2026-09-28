@@ -1,0 +1,233 @@
+---
+title: "SEC OpenAlex Publication Cleaning"
+author: "Alexander Harriman"
+date: "2025-05-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, warning = FALSE}
+library(readr)
+library(RSQLite)
+library(dplyr)
+library(tidyverse)
+library(data.table)
+```
+
+
+```{r}
+con <- dbConnect(SQLite(), "C:\\Users\\aharrima\\OneDrive - University of Tennessee\\Documents\\SEC_and_Peer_Publications.db")
+```
+
+# Load the Publications from SEC Schools
+
+
+```{r}
+alabama <- dbGetQuery(con, 
+                           "
+                           SELECT *
+                           FROM openalex_pubs_alabama
+                           ")
+
+
+arkansas <- dbGetQuery(con, 
+                           "
+                           SELECT *
+                           FROM openalex_pubs_arkansas
+                           ")
+
+
+auburn <- dbGetQuery(con, 
+                           "
+                           SELECT *
+                           FROM openalex_pubs_auburn
+                           ")
+
+
+georgia <- dbGetQuery(con, 
+                           "
+                           SELECT *
+                           FROM openalex_pubs_georgia
+                           ")
+
+kentucky <- dbGetQuery(con, 
+                           "
+                           SELECT *
+                           FROM openalex_pubs_kentucky
+                           ")
+
+lsu <- dbGetQuery(con, 
+                           "
+                           SELECT *
+                           FROM openalex_pubs_lsu
+                           ")
+
+checkLSU <- lsu |>
+  mutate(trueSEC = case_when(
+    (grepl('Louisiana State University', Affiliations, fixed = TRUE) | grepl('Baton Rouge', Affiliations, fixed = TRUE)) ~ 1,
+    .default = 0
+  )) |>
+  filter(trueSEC == 1) |>
+  select(Affiliations)
+
+msState <- dbGetQuery(con, 
+                           "
+                           SELECT *
+                           FROM openalex_pubs_mississippistate
+                           ")
+
+
+
+missouri <- dbGetQuery(con, 
+                           "
+                           SELECT *
+                           FROM openalex_pubs_missouri
+                           ")
+
+
+oklahoma <- dbGetQuery(con, 
+                           "
+                           SELECT *
+                           FROM openalex_pubs_oklahoma
+                           ")
+
+
+oleMiss <- dbGetQuery(con, 
+                           "
+                           SELECT *
+                           FROM openalex_pubs_olemiss
+                           ")
+
+checkOleMiss <- oleMiss |>
+  mutate(trueSEC = case_when(
+    (grepl('University of Mississippi', Affiliations, fixed = TRUE) | grepl('Univ of Mississippi', Affiliations, fixed = TRUE) | grepl('Mississippi, USA', Affiliations, fixed = TRUE) | grepl('Oxford', Affiliations, fixed = TRUE)) ~ 1,
+    .default = 0
+  )) |>
+  filter(trueSEC == 1) |>
+  select(Affiliations)
+
+southCarolina <- dbGetQuery(con, 
+                           "
+                           SELECT *
+                           FROM openalex_pubs_southcarolina
+                           ")
+
+checkSC <- southCarolina |>
+  mutate(trueSEC = case_when(
+    (grepl('University of South Carolina', Affiliations, fixed = TRUE) | grepl('University of  South Carolina', Affiliations, fixed = TRUE) | grepl('Columbia', Affiliations, fixed = TRUE)) ~ 1,
+    .default = 0
+  )) |>
+  filter(trueSEC == 1) |>
+  select(Affiliations)
+
+texasAM <- dbGetQuery(con, 
+                           "
+                           SELECT *
+                           FROM 'openalex_pubs_texasa&m'
+                           ")
+
+checkTexasAM <- texasAM |>
+  mutate(trueSEC = case_when(
+    (grepl('Texas A&M', Affiliations, fixed = TRUE) | grepl('College Station', Affiliations, fixed = TRUE)) ~ 1,
+    .default = 0
+  )) |>
+  filter(trueSEC == 1) |>
+  select(Affiliations)
+
+texasAustin <- dbGetQuery(con, 
+                           "
+                           SELECT *
+                           FROM openalex_pubs_texasaustin
+                           ")
+
+checkTexasAustin <- texasAustin |>
+  mutate(trueSEC = case_when(
+    (grepl('University of Texas', Affiliations, fixed = TRUE) | grepl('Austin', Affiliations, fixed = TRUE)) ~ 1,
+    .default = 0
+  )) |>
+  filter(trueSEC == 1) |>
+  select(Affiliations)
+
+florida <- dbGetQuery(con, 
+                           "
+                           SELECT *
+                           FROM openalex_pubs_uflorida
+                           ")
+
+checkFlorida <- florida |>
+  mutate(trueSEC = case_when(
+    (grepl('University of Florida', Affiliations, fixed = TRUE) | grepl('Florida Univ', Affiliations, fixed = TRUE) | grepl('Gainesville', Affiliations, fixed = TRUE)) ~ 1,
+    .default = 0
+  )) |>
+  filter(trueSEC == 1) |>
+  select(Affiliations)
+
+vandy <- dbGetQuery(con, 
+                           "
+                           SELECT *
+                           FROM openalex_pubs_vanderbilt
+                           ")
+
+checkVandy <- vandy |>
+  mutate(trueSEC = case_when(
+    (grepl('Vanderbilt', Affiliations, fixed = TRUE) | grepl('Vandy', Affiliations, fixed = TRUE) | grepl('Nashville', Affiliations, fixed = TRUE)) ~ 1,
+    .default = 0
+  )) |>
+  filter(trueSEC == 1) |>
+  select(Affiliations)
+```
+
+
+
+# Combine the Publications
+
+```{r}
+secPubs <- rbind(alabama, arkansas, auburn, georgia, kentucky, lsu, missouri, msState, oklahoma, oleMiss, southCarolina, texasAM, texasAustin, florida, vandy)
+```
+
+
+
+# Clean up Extra Columns
+
+```{r}
+secExport <- secPubs |>
+  mutate(is_oa = case_when(
+    oa_status %in%  c('closed', 'green') ~ 0,
+    !oa_status %in% c('closed', 'green') ~ 1,
+    .default = 0
+  ),
+         is_oa_anywhere = case_when(
+    oa_status == 'closed' ~ 0,
+    oa_status != 'closed' ~ 1,
+    .default = 0
+  )) |>
+  mutate(isOAwithGreen = ifelse(oa_status == 'closed', 0, 1),
+         isOAwithoutGreen = ifelse(oa_status %in% c('closed', 'green'), 0, 1),
+         isBronze = ifelse(oa_status == 'bronze', 1, 0),
+         isGold = ifelse(oa_status == 'gold', 1, 0), 
+         isHybrid = ifelse(oa_status == 'hybrid', 1, 0),
+         isDiamond = ifelse(oa_status == 'diamond', 1, 0),
+         isGreen = ifelse(oa_status == 'green', 1, 0),
+         isFirstOrLast = ifelse(isFirstSchool == 'Yes' | isLastSchool == 'Yes', 1, 0),
+         isCorrespondingAuthor = ifelse(isCorrespondingAuthor == 'Yes', 1, 0)) |>
+  mutate(Authors = ifelse(nchar(Authors) > 25000, paste0(substr(Authors, 1, 25000), '...'), Authors),
+         Affiliations = ifelse(nchar(Affiliations) > 25000, paste0(substr(Affiliations, 1, 25000), '...'), Affiliations)) |>
+  filter(is.na(doi) == FALSE) |>
+  select(title, display_name, doi, publication_date, publication_year, cited_by_count, type, is_oa, is_oa_anywhere, oa_status, source_display_name, host_organization_name, referenced_works_count, Subjects, Authors, Affiliations, isFirstSchool, isLastSchool, isCorrespondingAuthor, `Publication Campus`, `Publication Source`, `Unified Publisher`, isOAwithGreen, isOAwithoutGreen, isBronze, isGold, isHybrid, isDiamond, isGreen, isFirstOrLast)
+```
+
+
+
+
+# Export the Publications
+
+```{r, warning = FALSE}
+setwd('C:\\Users\\aharrima\\OneDrive - University of Tennessee\\Documents\\Big Package Usage Across the UT System\\Publication Analysis')
+
+write.csv(secExport, 'All Publications SEC Schools.csv', row.names = FALSE)
+```
+
